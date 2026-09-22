@@ -1,0 +1,13 @@
+# Build output. Everything a build writes goes under one of these.
+/build*/
+/out/
+/.vs/
+CMakeUserPresets.json
+
+# Stray compiler output from building a single file in place.
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib

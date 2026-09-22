@@ -1,0 +1,7 @@
+# Stored with LF, checked out with CRLF: a Windows library, edited on Windows. Pinned
+# here rather than left to each clone's core.autocrlf, so a whole-file rewrite by any
+# editor cannot turn into a diff of every line.
+* text=auto eol=crlf
+
+*.png binary
+*.ico binary
