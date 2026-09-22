@@ -85,14 +85,13 @@ backgrounds that are not controls are drawn in `PaintPage()`. Coordinates are in
 For a scrolling page, return the scrolling area from `ClipRect()` and set `scrolls` on
 the controls inside it. `examples/gallery` does this.
 
-## Limitations
+## Documentation
 
-- No UI Automation support, so screen readers cannot see the controls. High contrast
-  themes are not supported either.
-- No layout containers. Controls are placed with rectangles.
-- TextBox is single-line and uses IMM32. It has no undo and no context menu.
-- The title bar icon is drawn in one color, using its alpha channel as a mask.
-- Flyouts have a solid background instead of Acrylic.
+- [Overview](docs/README.md): headers and core concepts
+- [Window](docs/window.md): creating a window, page callbacks, input, scrolling
+- [Controls](docs/controls.md): the nine controls
+- [Custom controls](docs/widget.md): writing a control of your own
+- [Drawing](docs/drawing.md): painter, palette, fonts, icons, animation
 
 ## License
 
