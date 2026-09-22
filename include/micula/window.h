@@ -458,6 +458,11 @@ struct Window {
     // The page paints an opaque background instead of letting the material through.
     bool micaActive = false;
     bool resizable = false;
+    // How Create shows the window. SW_HIDE leaves it hidden for the program to show
+    // later: after restoring a saved position, say, or without taking the foreground
+    // (SetWindowPos with SWP_SHOWWINDOW | SWP_NOACTIVATE). SW_SHOW activates, and the
+    // window that had the foreground loses it even when the activation is refused.
+    int showCommand = SW_SHOW;
 
     // The composition stack, in the order it has to be built and the reverse of the
     // order it has to be torn down.
@@ -1268,8 +1273,10 @@ inline bool Window::Create(int dipW, int dipH, bool canResize, HICON icon) {
 
     ApplyThemeToFrame();
     Layout();
-    ShowWindow(hwnd, SW_SHOW);
-    UpdateWindow(hwnd);
+    if (showCommand != SW_HIDE) {
+        ShowWindow(hwnd, showCommand);
+        UpdateWindow(hwnd);
+    }
     return true;
 }
 

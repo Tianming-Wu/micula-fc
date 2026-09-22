@@ -1,54 +1,40 @@
 # Micula
 
-A small Fluent control set for plain Win32 programs — the settings window of a tool,
-an installer, a configurator — in three headers and about 85 KB of code.
+Fluent-style controls for Win32 programs. Header-only C++17, with no dependencies
+outside the Windows SDK.
 
-*Micula* is Latin for "a small crumb". *Mica* is the crumb it is a diminutive of, and
-also the material the window is drawn on.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.png">
+  <img src="docs/screenshot-light.png" width="862" alt="A settings window built with Micula, with Mica behind it">
+</picture>
 
-- **Mica behind the window.** Direct2D on a DirectComposition swap chain with real
-  alpha, `WS_EX_NOREDIRECTIONBITMAP`, and DWM's system backdrop. Windows 10 and early
-  Windows 11 get an opaque background instead; the window works the same.
-- **A caption drawn in the same pass as the page**, so the backdrop reaches the top edge
-  — while hover on the maximise button still opens Windows 11's snap layouts, and
-  dragging, double-click and the window menu are still Windows' own.
-- **Numbers taken from WinUI rather than guessed.** The palette is Fluent's published
-  tokens, alpha included. The accent is read from the machine, in the shade Windows
-  itself uses for each theme. Control sizes, timings and easing curves come from WinUI's
-  control templates, and the comments say which one.
-- **Nothing to install.** Header-only, Windows SDK only, no WinRT, no runtime. A program
-  built with `/MT` is one `.exe` that runs on a machine that has installed nothing.
+Micula renders with Direct2D into a DirectComposition swap chain, so Windows 11 can draw
+Mica behind the window. It draws its own title bar and keeps snap layouts working. On
+Windows 10, and on Windows 11 before 22H2, the window gets a solid background instead.
+
+It is meant for small tools: settings windows, installers, configuration dialogs. The
+library adds about 85 KB to an x64 executable, and a program built with `/MT` runs on a
+machine with nothing installed.
 
 ## Controls
 
-| Control | Notes |
-|---|---|
-| `Button` | Accent, Standard, Subtle and Link styles; optional icon glyph |
-| `CheckBox` | Optional second line of detail |
-| `ToggleSwitch` | Animated knob; draws only the switch when given no label |
-| `Segmented` | Three or four mutually exclusive options side by side |
-| `Slider` | `onChange` while dragging, `onCommit` once when the gesture ends |
-| `ScrollBar` | WinUI's three states (hidden, indicator, expanded), repeat buttons, "Always show scrollbars" honoured |
-| `DropDown` | Flyout that flips upwards when there is no room below, and scrolls when there is no room either way |
-| `TextBox` | Single line: caret, mouse and keyboard selection, clipboard, IME; `pathField` for paths |
-| `ProgressBar` | Determinate and indeterminate |
+Button, CheckBox, ToggleSwitch, Segmented, Slider, ScrollBar, DropDown, TextBox,
+ProgressBar.
 
-Anything else is a `Widget` subclass of your own: a rectangle, a `Paint`, and whichever
-input hooks it needs.
+Colors, sizes and animation timings come from WinUI's control templates and the Fluent
+design tokens. The accent color and the light or dark theme are read from the system.
 
-## A window
+## Example
 
 ```cpp
 #include <micula/micula.h>
 
 struct Hello : micula::Window {
-    bool on = false;   // state lives in the page, not in the controls
+    bool on = false;
 
     const wchar_t *ClassName() const override { return L"Hello"; }
     const wchar_t *Title() const override { return L"Hello"; }
 
-    // Builds every control from the page's state. Runs on resize, and whenever
-    // the page calls it.
     void Layout() override {
         ClearWidgets();
         auto *sw = Add(new micula::ToggleSwitch(L"Enabled", on, [this](bool v) { on = v; }));
@@ -61,89 +47,53 @@ struct Hello : micula::Window {
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t *, int) {
     micula::EnablePerMonitorDpi();
-    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);   // WIC, for icons and pictures
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     Hello w;
     return w.Create(340, 170, false, nullptr) ? w.Run() : 1;
 }
 ```
 
-`examples/gallery` puts every control on one scrolling page, and is the reference for the
-parts this sample leaves out: a fixed header over scrolling cards, a persistent scroll
-bar, text drawn in `PaintPage`, and rebuilding the page from inside a callback.
+`examples/settings` is the window in the screenshot. `examples/gallery` puts every
+control on one scrolling page.
 
 ## Building
 
-Header-only, C++17, MSVC. The headers name every library they need with
-`#pragma comment`, so a bare compiler line is enough:
+The headers link the libraries they need through `#pragma comment`, so with MSVC this is
+enough:
 
 ```bat
 cl /std:c++17 /EHsc /O1 /MT /I include app.cpp /link /SUBSYSTEM:WINDOWS
 ```
 
-With CMake:
+With CMake, add this directory and link `micula::micula`. Building the repository itself
+builds both examples.
 
-```cmake
-add_subdirectory(micula)            # or FetchContent
-target_link_libraries(app PRIVATE micula::micula)
-```
+A program using Micula has to:
 
-`cmake -S . -B build` on this repository builds the gallery. The headers are plain
-ASCII and call the `W` functions throughout, so they compile the same with or without
-`UNICODE` and `/utf-8`, and after a `<windows.h>` that was included without `NOMINMAX`.
+- initialize COM on the UI thread (apartment-threaded) before `Window::Create`. The title
+  bar icon and `Window::Image` use WIC.
+- be per-monitor DPI aware, through its manifest or `micula::EnablePerMonitorDpi()`.
+- leave timer IDs 2 and 4 to 7 to Micula.
 
-Measured with MSVC 14.50, x64, `/O1 /GL`, all at the same flags: a probe that places all
-nine controls is 204 KB with the CRT linked statically (`/MT`) and 101 KB against the DLL
-CRT (`/MD`). A bare Win32 window using the same standard containers is 117 KB and 17 KB,
-so Micula itself is 83 to 88 KB. The gallery is 248 KB and 114 KB.
+## How it works
 
-## What a program provides
+Each window is a subclass of `micula::Window`. `Layout()` deletes the controls and
+creates them again from the window's own fields, so a callback should update those
+fields rather than the control. `Layout()` may be called from inside a callback. Text and
+backgrounds that are not controls are drawn in `PaintPage()`. Coordinates are in DIPs.
 
-- **COM** initialised on the UI thread, apartment-threaded, before `Window::Create`.
-  The caption icon and `Window::Image` go through WIC; without COM both are silently
-  missing.
-- **Per-monitor DPI awareness**, ideally in the manifest. `EnablePerMonitorDpi()` also
-  sets it from code.
-- **Timer ids** outside 2 and 4–7, which Micula uses. A page's own timers and any
-  message Micula does not handle reach `Window::OnAppMessage`.
-
-## How a page works
-
-- `Layout()` throws the controls away and builds them again from the page's own fields.
-  A control's callback writes the field it shows. Do not keep a pointer to a control
-  across a `Layout()` unless you set `persistent` on it.
-- `Layout()` may be called from inside a control's callback — a "Next" button that
-  replaces its own page. The window keeps the old controls alive until that message
-  returns.
-- Everything that is not a control is drawn in `PaintPage`. Coordinates are DIPs; the
-  window's DPI is on the render target.
-- `ClipRect()` names the scrolling part of the page, and controls with `scrolls` set are
-  clipped to it. `ContentTransform()` offsets and fades that part while it is drawn, and
-  hit-testing subtracts the same offset, which is how a page glides or arrives without
-  being laid out every frame.
-- Idle windows block in `GetMessage`. While anything animates, frames are paced by the
-  compositor's clock where Windows has one (Windows 11) and by a high-resolution timer
-  where it does not.
+For a scrolling page, return the scrolling area from `ClipRect()` and set `scrolls` on
+the controls inside it. `examples/gallery` does this.
 
 ## Limitations
 
-These are known, and each is a reason not to use Micula for something:
-
-- **No accessibility.** Nothing publishes a UI Automation provider and high-contrast
-  themes are not followed, so a screen reader sees an empty window. This is the largest
-  gap. A program that must be usable without sight needs another way to do the same
-  things — a command line, a config file.
-- **No layout system.** Controls are placed in DIP rectangles that the page computes.
-  There are no panels, no measure/arrange and no data binding.
-- **`TextBox` is single-line**, through IMM32 rather than TSF, with no undo, context
-  menu, drag-and-drop or right-to-left text.
-- **The caption icon is drawn as a monochrome mask** in the caption's text colour. That
-  suits a white mark on either theme and turns a colour icon into its silhouette.
-- **Acrylic is not drawn.** Flyouts use the solid colour WinUI falls back to when
-  transparency effects are off.
+- No UI Automation support, so screen readers cannot see the controls. High contrast
+  themes are not supported either.
+- No layout containers. Controls are placed with rectangles.
+- TextBox is single-line and uses IMM32. It has no undo and no context menu.
+- The title bar icon is drawn in one color, using its alpha channel as a mask.
+- Flyouts have a solid background instead of Acrylic.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
-
-Micula is not affiliated with or endorsed by Microsoft. WinUI, Fluent and Windows are
-Microsoft's names, used here only to say what this imitates.
+MIT. Micula is not affiliated with Microsoft.

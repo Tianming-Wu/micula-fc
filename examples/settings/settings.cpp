@@ -1,0 +1,260 @@
+// Settings window for a made-up folder cleanup tool, laid out like Windows 11's
+// Settings app: navigation on the left, cards on the right. It is the window in the
+// README screenshot. Nothing here touches the file system.
+
+#include <micula/micula.h>
+
+#include <cwchar>
+#include <string>
+#include <vector>
+
+using namespace micula;
+
+namespace {
+
+constexpr float kNavW    = 240.0f;
+constexpr float kCardH   = 68.0f;
+constexpr float kCardGap = 4.0f;
+
+// Segoe Fluent Icons code points that theme.h does not name.
+constexpr const wchar_t *kIconDelete   = L"\uE74D";
+constexpr const wchar_t *kIconRecent   = L"\uE823";
+constexpr const wchar_t *kIconDrive    = L"\uEDA2";
+constexpr const wchar_t *kIconColor    = L"\uE790";
+constexpr const wchar_t *kIconCalendar = L"\uE787";
+constexpr const wchar_t *kIconCamera   = L"\uE722";
+constexpr const wchar_t *kIconAdd      = L"\uE710";
+constexpr const wchar_t *kIconBattery  = L"\uE945";
+
+struct NavItem { const wchar_t *icon, *label; };
+const NavItem kNav[] = {
+    { glyph::kSettings, L"General" },
+    { kIconCalendar,    L"Schedule" },
+    { glyph::kFolder,   L"Folders" },
+    { glyph::kInfo,     L"About" },
+};
+
+std::wstring Gb(float v) {
+    wchar_t b[16];
+    swprintf(b, 16, L"%d GB", (int)(v + 0.5f));
+    return b;
+}
+
+}  // namespace
+
+struct Settings : Window {
+    int page = 0;
+
+    bool  autoClean = true;
+    int   olderThan = 3;
+    float freeGb = 20.0f;
+    std::wstring archive = L"D:\\Archive\\Downloads";
+    int   theme = 0;                 // System, Light, Dark
+
+    int   when = 1;
+    int   hour = 1;
+    bool  onBattery = false;
+
+    bool  downloads = true, desktop = false, screenshots = true;
+
+    // What PaintPage draws, worked out by Layout.
+    struct Card {
+        D2D1_RECT_F r;
+        const wchar_t *icon;
+        std::wstring title, detail;
+        float slotLeft;              // the control's left edge; text stops short of it
+        std::wstring aside;          // a value shown beside the control
+        const bool *onOff;           // or, for a switch, "On" / "Off"
+    };
+    std::vector<Card> cards;
+    std::vector<std::pair<float, std::wstring>> headings;
+    D2D1_RECT_F navSel = {};
+    size_t freeCard = 0;
+    float footerY = -1.0f;
+
+    const wchar_t *ClassName() const override { return L"MiculaSettings"; }
+    const wchar_t *Title() const override { return L"Folder Cleanup"; }
+    void MinSize(int *w, int *h) const override { *w = 760; *h = 580; }
+
+    void ApplyTheme() {
+        const bool dark = theme == 0 ? SystemUsesDarkTheme() : theme == 2;
+        pal = MakePalette(dark);
+        ApplyThemeToFrame();
+        Invalidate();
+    }
+
+    void Layout() override;
+    void PaintPage(const Painter &p) override;
+};
+
+void Settings::Layout() {
+    ClearWidgets();
+    cards.clear();
+    headings.clear();
+    footerY = -1.0f;
+    const float w = ClientW();
+    Painter measure;
+    measure.font = &fonts;
+
+    float ny = kCaptionH + 12;
+    for (int i = 0; i < 4; i++) {
+        Button *b = Add(new Button(kNav[i].label, ButtonStyle::Subtle, [this, i] {
+            page = i;
+            Layout();
+            Invalidate();
+        }));
+        b->glyph = kNav[i].icon;
+        b->leftAlign = true;
+        b->rect = { 8, ny, kNavW - 8, ny + 36 };
+        if (i == page) navSel = b->rect;
+        ny += 40;
+    }
+
+    const float left = kNavW + 16, right = w - 32;
+    float y = kCaptionH + 64;
+    auto heading = [&](const wchar_t *text) {
+        y += 16;
+        headings.push_back({ y, text });
+        y += 32;
+    };
+    // Adds a card and returns the rectangle for its control.
+    auto card = [&](const wchar_t *icon, std::wstring title, std::wstring detail,
+                    float controlW) {
+        const D2D1_RECT_F r = { left, y, right, y + kCardH };
+        const float slot = right - 20 - controlW;
+        cards.push_back({ r, icon, std::move(title), std::move(detail), slot, L"", nullptr });
+        y += kCardH + kCardGap;
+        const float cy = (r.top + r.bottom) / 2;
+        return D2D1_RECT_F{ slot, cy - metric::kControlH / 2, right - 20,
+                            cy + metric::kControlH / 2 };
+    };
+    auto toggle = [&](const wchar_t *icon, const wchar_t *title, const wchar_t *detail,
+                      bool *state) {
+        Add(new ToggleSwitch(L"", *state, [this, state](bool on) {
+            *state = on;
+            Invalidate();
+        }))->rect = card(icon, title, detail, 40);
+        cards.back().onOff = state;
+    };
+
+    switch (page) {
+    case 0: {
+        toggle(kIconDelete, L"Clean up automatically",
+               L"Move files you haven't opened in a while to the archive folder", &autoClean);
+        Add(new DropDown({ L"1 day", L"1 week", L"2 weeks", L"30 days", L"60 days", L"90 days" },
+                         olderThan, [this](int i) { olderThan = i; }))
+            ->rect = card(kIconRecent, L"Move files older than",
+                          L"Counted from the last time a file was opened", 160);
+        Add(new Slider(freeGb, 5.0f, 100.0f, 5.0f, [this](float v) {
+            freeGb = v;
+            if (freeCard < cards.size()) cards[freeCard].aside = Gb(v);
+        }))->rect = card(kIconDrive, L"Keep free space above",
+                         L"Clean up early when space runs low", 200);
+        freeCard = cards.size() - 1;
+        cards.back().aside = Gb(freeGb);
+        TextBox *t = Add(new TextBox());
+        t->SetText(archive);
+        t->pathField = true;
+        t->onChange = [this](const std::wstring &s) { archive = s; };
+        t->rect = card(glyph::kFolder, L"Archive folder", L"Where moved files go", 260);
+
+        heading(L"Appearance");
+        Add(new Segmented({ L"System", L"Light", L"Dark" }, theme, [this](int i) {
+            theme = i;
+            ApplyTheme();
+        }))->rect = card(kIconColor, L"Theme", L"Follow Windows, or pick one for this app", 240);
+
+        y += 12;
+        footerY = y;
+        Button *run = Add(new Button(L"Clean up now", ButtonStyle::Accent, [] {}));
+        Button *log = Add(new Button(L"View log", ButtonStyle::Standard, [] {}));
+        const float rw = run->PreferredWidth(measure), lw = log->PreferredWidth(measure);
+        run->rect = { right - rw, y, right, y + metric::kControlH };
+        log->rect = { right - rw - 8 - lw, y, right - rw - 8, y + metric::kControlH };
+        break;
+    }
+    case 1:
+        Add(new Segmented({ L"At sign-in", L"Daily", L"Weekly" }, when,
+                          [this](int i) { when = i; }))
+            ->rect = card(kIconCalendar, L"Run", L"When a cleanup starts", 300);
+        Add(new DropDown({ L"Midnight", L"2:00", L"4:00", L"6:00", L"Noon", L"18:00" }, hour,
+                         [this](int i) { hour = i; }))
+            ->rect = card(kIconRecent, L"Time of day", L"For daily and weekly cleanups", 160);
+        toggle(kIconBattery, L"Run on battery power",
+               L"Off by default, so a laptop is not woken to tidy up", &onBattery);
+        break;
+    case 2: {
+        toggle(glyph::kFolder, L"Downloads", L"Files saved by browsers and other apps",
+               &downloads);
+        toggle(glyph::kFolder, L"Desktop", L"Loose files on the desktop", &desktop);
+        toggle(kIconCamera, L"Screenshots", L"Pictures\\Screenshots", &screenshots);
+        Button *add = Add(new Button(L"Browse", ButtonStyle::Standard, [] {}));
+        add->rect = card(kIconAdd, L"Add a folder", L"Any folder can be cleaned up the same way",
+                         add->PreferredWidth(measure));
+        break;
+    }
+    case 3:
+        card(glyph::kInfo, L"Folder Cleanup 1.0",
+             L"An example program for Micula. It does not move or delete anything.", 0);
+        card(glyph::kSettings, L"Built with Micula " MICULA_VERSION_STRING,
+             L"Header-only Fluent controls for Win32", 0);
+        break;
+    }
+}
+
+void Settings::PaintPage(const Painter &p) {
+    const Palette &c = *p.pal;
+    const float w = ClientW();
+
+    // Windows 11's navigation selection: a subtle fill and a short accent bar.
+    if (navSel.right > navSel.left) {
+        p.FillRound(navSel, metric::kRadiusControl, c.subtleHover);
+        const float cy = (navSel.top + navSel.bottom) / 2;
+        p.FillRound({ navSel.left, cy - 8, navSel.left + 3, cy + 8 }, 1.5f, c.accent);
+    }
+
+    p.Text(kNav[page].label, { kNavW + 16, kCaptionH + 8, w - 32, kCaptionH + 56 },
+           p.font->title, c.textPrimary);
+
+    for (const auto &h : headings)
+        p.Text(h.second, { kNavW + 16, h.first, w - 32, h.first + 32 }, p.font->bodyStrong,
+               c.textPrimary);
+
+    for (const Card &cd : cards) {
+        const D2D1_RECT_F &r = cd.r;
+        p.FillRound(r, metric::kRadiusControl, c.cardBg);
+        p.StrokeRound(r, metric::kRadiusControl, c.cardStroke);
+        p.Text(cd.icon, { r.left + 20, r.top, r.left + 40, r.bottom }, p.font->icon,
+               c.textPrimary);
+
+        float textRight = cd.slotLeft - 16;
+        const std::wstring aside = cd.onOff ? (*cd.onOff ? L"On" : L"Off") : cd.aside;
+        if (!aside.empty()) {
+            const float aw = p.MeasureWidth(aside, p.font->body);
+            p.Text(aside, { cd.slotLeft - 12 - aw, r.top, cd.slotLeft - 11, r.bottom },
+                   p.font->body, c.textPrimary);
+            textRight = cd.slotLeft - 12 - aw - 16;
+        }
+        p.Text(cd.title, { r.left + 56, r.top + 13, textRight, r.top + 33 }, p.font->body,
+               c.textPrimary);
+        p.Text(cd.detail, { r.left + 56, r.top + 33, textRight, r.top + 53 }, p.font->caption,
+               c.textSecondary);
+    }
+
+    if (footerY >= 0.0f)
+        p.Text(L"Last cleanup 2 hours ago, 1.4 GB moved",
+               { kNavW + 16, footerY, w - 300, footerY + metric::kControlH }, p.font->caption,
+               c.textSecondary);
+}
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t *, int) {
+    EnablePerMonitorDpi();
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) return 1;
+    int code = 1;
+    {
+        Settings s;
+        if (s.Create(860, 580, true, nullptr)) code = s.Run();
+    }
+    CoUninitialize();
+    return code;
+}
