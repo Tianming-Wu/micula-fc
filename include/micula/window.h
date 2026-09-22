@@ -100,10 +100,9 @@ namespace micula {
 //
 // **Resolved at run time, and the reason is the same one frameclock::Resolve gives.**
 //
-// These four live in user32 and none of them has always been there:
+// These three live in user32 and none of them has always been there:
 //
 //     GetDpiForWindow           Windows 10 1607 (14393)
-//     AdjustWindowRectExForDpi  Windows 10 1607
 //     GetSystemMetricsForDpi    Windows 10 1607
 //     SetProcessDpiAwarenessContext  Windows 10 1703 (15063)
 //
@@ -115,7 +114,7 @@ namespace micula {
 // same reason.
 //
 // The fallbacks are the pre-1607 answers, not stubs: system DPI for the window, the
-// old ex-metrics call, and the process-wide awareness Windows 8.1 and Vista offer. A
+// plain metrics call, and the process-wide awareness Windows 8.1 and Vista offer. A
 // machine old enough to take them is a machine on which per-monitor DPI did not exist,
 // so nothing is being taken away from it.
 namespace dpiapi {
@@ -135,14 +134,6 @@ inline UINT ForWindow(HWND hwnd) {
     const UINT d = dc ? (UINT)GetDeviceCaps(dc, LOGPIXELSX) : 96;
     if (dc) ReleaseDC(nullptr, dc);
     return d ? d : 96;
-}
-
-inline BOOL AdjustRect(RECT *r, DWORD style, BOOL menu, DWORD exStyle, UINT dpi) {
-    using Fn = BOOL(WINAPI *)(RECT *, DWORD, BOOL, DWORD, UINT);
-    static const Fn fn =
-        User32() ? (Fn)GetProcAddress(User32(), "AdjustWindowRectExForDpi") : nullptr;
-    if (fn) return fn(r, style, menu, exStyle, dpi);
-    return AdjustWindowRectEx(r, style, menu, exStyle);
 }
 
 inline int SystemMetric(int index, UINT dpi) {
@@ -463,6 +454,17 @@ struct Window {
     // (SetWindowPos with SWP_SHOWWINDOW | SWP_NOACTIVATE). SW_SHOW activates, and the
     // window that had the foreground loses it even when the activation is refused.
     int showCommand = SW_SHOW;
+    // How much of the window is not client area, in pixels: the resize border on the
+    // left, right and bottom. Read from the window rather than computed, because the
+    // caption is client area here and no system metric describes that frame.
+    SIZE frameExtra = {};
+    void MeasureFrame() {
+        if (!hwnd || IsIconic(hwnd) || IsZoomed(hwnd)) return;
+        RECT wr, cr;
+        GetWindowRect(hwnd, &wr);
+        GetClientRect(hwnd, &cr);
+        frameExtra = { (wr.right - wr.left) - cr.right, (wr.bottom - wr.top) - cr.bottom };
+    }
 
     // The composition stack, in the order it has to be built and the reverse of the
     // order it has to be torn down.
@@ -1258,10 +1260,15 @@ inline bool Window::Create(int dipW, int dipH, bool canResize, HICON icon) {
                            nullptr, nullptr, wc.hInstance, this);
     if (!hwnd) return false;
 
+    // dipW x dipH is the client area. The frame around it is not the one
+    // AdjustWindowRectEx computes for this style -- WM_NCCALCSIZE hands the caption and
+    // the top border to the client -- so it is measured from the window instead: size it
+    // once, read how much of it is not client, and size it again.
     dpi = dpiapi::ForWindow(hwnd);
-    RECT want = { 0, 0, MulDiv(dipW, dpi, 96), MulDiv(dipH, dpi, 96) };
-    dpiapi::AdjustRect(&want, style, FALSE, 0, dpi);
-    const int w = want.right - want.left, h = want.bottom - want.top;
+    const int cw = MulDiv(dipW, dpi, 96), ch = MulDiv(dipH, dpi, 96);
+    SetWindowPos(hwnd, nullptr, 0, 0, cw, ch, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    MeasureFrame();
+    const int w = cw + frameExtra.cx, h = ch + frameExtra.cy;
     // Centred on the monitor the window landed on, not on the primary. On a laptop
     // docked to a second screen those are different, and a window that opens on the
     // screen the pointer is not on is a small daily annoyance this can avoid.
@@ -1509,6 +1516,7 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SIZE:
+        if (wp == SIZE_RESTORED) self->MeasureFrame();
         self->Resize();
         self->Layout();
         self->Invalidate();
@@ -1615,15 +1623,11 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         int mw = 0, mh = 0;
         self->MinSize(&mw, &mh);
         if (mw <= 0 && mh <= 0) break;
-        // The minimum is a *window* size and MinSize speaks in client DIPs. The frame
-        // this window draws itself is nothing but the resize border, so AdjustWindowRect
-        // against its real style is what turns one into the other.
-        RECT r = { 0, 0, (LONG)(mw * self->scale()), (LONG)(mh * self->scale()) };
-        AdjustWindowRectEx(&r, (DWORD)GetWindowLongPtrW(h, GWL_STYLE), FALSE,
-                           (DWORD)GetWindowLongPtrW(h, GWL_EXSTYLE));
+        // The minimum is a *window* size and MinSize speaks in client DIPs. The
+        // difference is the frame this window keeps, as measured -- see MeasureFrame.
         MINMAXINFO *mmi = (MINMAXINFO *)lp;
-        if (mw > 0) mmi->ptMinTrackSize.x = r.right - r.left;
-        if (mh > 0) mmi->ptMinTrackSize.y = r.bottom - r.top;
+        if (mw > 0) mmi->ptMinTrackSize.x = (LONG)(mw * self->scale()) + self->frameExtra.cx;
+        if (mh > 0) mmi->ptMinTrackSize.y = (LONG)(mh * self->scale()) + self->frameExtra.cy;
         return 0;
     }
     case WM_MOUSEWHEEL: {

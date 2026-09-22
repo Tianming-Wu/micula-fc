@@ -304,7 +304,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t *, int) {
     int code = 1;
     {
         Settings s;
-        if (s.Create(700, 570, true, nullptr)) code = s.Run();
+        if (s.Create(700, 630, true, nullptr)) code = s.Run();
     }
     CoUninitialize();
     return code;
