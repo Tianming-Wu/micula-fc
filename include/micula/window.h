@@ -1357,11 +1357,12 @@ inline int Window::Run() {
     LARGE_INTEGER paceMark = {};
     LONGLONG period = 0;
     MSG msg = {};
+    int exitCode = 0;
     while (alive) {
         const bool moving = Animating() || AnimationWanted();
         if (!moving) {
             animOn = false;
-            if (GetMessageW(&msg, nullptr, 0, 0) <= 0) break;
+            if (GetMessageW(&msg, nullptr, 0, 0) <= 0) { exitCode = (int)msg.wParam; break; }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
             // The clock is only picked up again here: a window that sat idle for a
@@ -1379,7 +1380,7 @@ inline int Window::Run() {
             if (!clock) period = frameclock::RefreshPeriod(hwnd);
         }
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) { alive = false; break; }
+            if (msg.message == WM_QUIT) { exitCode = (int)msg.wParam; alive = false; break; }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -1410,11 +1411,16 @@ inline int Window::Run() {
             QueryPerformanceCounter(&paceMark);
         }
     }
+    // Usually the loop ends because WM_DESTROY cleared `alive`, before the WM_QUIT it
+    // posted has been read -- and then `msg` is whatever was being dispatched, an Alt+F4
+    // keystroke for one. The exit code is the quit message's, so take it from the queue.
+    MSG quit;
+    if (PeekMessageW(&quit, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE)) exitCode = (int)quit.wParam;
     if (pace) CloseHandle(pace);
     fonts.Release();
     ReleaseDevice();
     if (dw) { dw->Release(); dw = nullptr; }
-    return (int)msg.wParam;
+    return exitCode;
 }
 
 inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
