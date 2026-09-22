@@ -1,0 +1,203 @@
+# Controls
+
+In `micula/widgets.h`. Every control derives from [`Widget`](widget.md), so each also
+has `rect`, `visible`, `enabled`, `scrolls` and `persistent`. Set `rect` after `Add`.
+
+Callbacks may call `Layout()`, except `Slider::onChange` during a drag (see
+[Slider](#slider)).
+
+| Control | Height | Value | Callback |
+|---|---|---|---|
+| [Button](#button) | 32 | | `onClick()` |
+| [CheckBox](#checkbox) | 32, or 44 with `detail` | `checked` | `onChange(bool)` |
+| [ToggleSwitch](#toggleswitch) | 32, or 44 with `detail` | `on` | `onChange(bool)` |
+| [Segmented](#segmented) | 32 | `selected` | `onChange(int)` |
+| [Slider](#slider) | 32 | `value` | `onChange(float)`, `onCommit(float)` |
+| [DropDown](#dropdown) | 32 | `selected` | `onChange(int)` |
+| [TextBox](#textbox) | 32 | `text` | `onChange(text)`, `onCommit(text)` |
+| [ProgressBar](#progressbar) | any | `value` | |
+| [ScrollBar](#scrollbar) | 12 wide | `value` | `onScroll(to, glide)` |
+
+Heights are DIPs. The control height is `metric::kControlH`.
+
+## Button
+
+```cpp
+Button(std::wstring label, ButtonStyle style, std::function<void()> onClick);
+```
+
+| Member | Description |
+|---|---|
+| `std::wstring label` | Text. |
+| `ButtonStyle style` | `Accent` (the page's main action), `Standard`, `Subtle` (no box until hovered), `Link` (accent-colored text, hand cursor). |
+| `std::wstring glyph` | Optional icon, a Segoe Fluent Icons code point such as `glyph::kFolder`, drawn at the left. |
+| `bool leftAlign` | Left-align the label instead of centering it. For navigation lists. |
+| `std::function<void()> onClick` | Called on click, Space or Enter while enabled. |
+| `float PreferredWidth(const Painter &p) const` | Label width plus padding, at least 100 DIPs. `p` only needs `font` set. |
+
+```cpp
+micula::Painter measure;
+measure.font = &fonts;
+auto *ok = Add(new micula::Button(L"Save", micula::ButtonStyle::Accent, [this] { Save(); }));
+ok->rect = micula::Rect(24, y, ok->PreferredWidth(measure), micula::metric::kControlH);
+```
+
+## CheckBox
+
+```cpp
+CheckBox(std::wstring label, bool checked, std::function<void(bool)> onChange);
+```
+
+| Member | Description |
+|---|---|
+| `std::wstring label` | Text beside the box. |
+| `std::wstring detail` | Optional second line in the secondary text color. Needs a 44-DIP `rect`. |
+| `bool checked` | Current value. |
+| `std::function<void(bool)> onChange` | Called with the new value on click, Space or Enter. |
+
+The box is at the left of `rect`, vertically centered. Use a checkbox for a choice that
+is applied later, such as by an OK button.
+
+## ToggleSwitch
+
+```cpp
+ToggleSwitch(std::wstring label, bool on, std::function<void(bool)> onChange);
+```
+
+| Member | Description |
+|---|---|
+| `std::wstring label` | Text at the left of `rect`. Empty draws only the switch. |
+| `std::wstring detail` | Optional wrapped second line under the label. |
+| `bool on` | Current value. |
+| `std::function<void(bool)> onChange` | Called with the new value on click, Space or Enter. |
+
+The switch is 40 x 20 DIPs at the right edge of `rect`. Use a switch for a setting that
+takes effect immediately.
+
+## Segmented
+
+```cpp
+Segmented(std::vector<std::wstring> options, int selected, std::function<void(int)> onChange);
+```
+
+| Member | Description |
+|---|---|
+| `std::vector<std::wstring> options` | A few short labels. `rect` is divided equally between them. |
+| `int selected` | Index of the selected option. |
+| `std::function<void(int)> onChange` | Called with the new index on click, or on Left and Right (which wrap around). |
+
+## Slider
+
+```cpp
+Slider(float value, float lo, float hi, float step, std::function<void(float)> onChange);
+```
+
+| Member | Description |
+|---|---|
+| `float value`, `lo`, `hi`, `step` | Value and range. A dragged value is rounded to a multiple of `step`. |
+| `std::function<void(float)> onChange` | Called on every change: each pointer move during a drag, and each key. |
+| `std::function<void(float)> onCommit` | Called once when a drag ends, and after each key. Save settings here, not in `onChange`. Not a constructor argument. |
+
+Keys: Left and Down subtract `step`, Right and Up add it, Home and End go to `lo` and
+`hi`.
+
+During a drag, `onChange` is called while the window is painting. Update the page's
+fields there, but don't call `Layout()` or add or remove controls. Do that in
+`onCommit`.
+
+## DropDown
+
+```cpp
+DropDown(std::vector<std::wstring> options, int selected, std::function<void(int)> onChange);
+```
+
+| Member | Description |
+|---|---|
+| `std::vector<std::wstring> options` | The list. |
+| `int selected` | Index of the selected option. |
+| `std::function<void(int)> onChange` | Called with the new index when a different row is clicked, or on Up and Down (which wrap around). |
+| `bool open` | Whether the list is showing. Read only. |
+
+Click, Space or Enter opens the list; a click on a row chooses it; Esc, a click
+elsewhere or deactivating the window closes it. The list opens below the control, or
+above it when it only fits there. When it fits on neither side it takes the larger side
+and scrolls. The available room is `ClipRect()`, or the client area below the title bar
+when the page does not scroll.
+
+`rect` must be 32 DIPs tall: while the list is open, `rect` grows to cover it. An open
+list's scroll bar uses timers 6 and 7.
+
+## TextBox
+
+```cpp
+TextBox();
+```
+
+| Member | Description |
+|---|---|
+| `std::wstring text` | Current text. Read it; set it with `SetText`. |
+| `void SetText(const std::wstring &s)` | Replaces the text and puts the caret at the end. Does not call `onChange`. |
+| `std::wstring placeholder` | Shown in the disabled text color while the field is empty. |
+| `bool pathField` | For file system paths. Paste also removes surrounding quotes, as added by Explorer's Copy as path, and trailing spaces. |
+| `std::function<void(const std::wstring &)> onChange` | Called after every edit. |
+| `std::function<void(const std::wstring &)> onCommit` | Called on Enter and when the field loses focus. Save here. |
+
+```cpp
+auto *t = Add(new micula::TextBox());
+t->SetText(folder);
+t->pathField = true;
+t->onChange = [this](const std::wstring &s) { folder = s; };
+t->rect = micula::Rect(24, y, 320, micula::metric::kControlH);
+```
+
+Supported: caret and selection with mouse and keyboard, double-click to select a word
+(separated by spaces, `\` and `/`), Shift+click, Left, Right, Home, End (with Shift to
+select), Backspace, Delete, Ctrl+A, Ctrl+C, Ctrl+X, Ctrl+V, IME input. Paste keeps only
+the first line.
+
+Not supported: multiple lines, undo, context menu, drag and drop, right-to-left text.
+
+## ProgressBar
+
+```cpp
+ProgressBar();
+```
+
+| Member | Description |
+|---|---|
+| `float value` | Progress from 0 to 1. |
+| `bool indeterminate` | Show a moving segment instead of `value`. Keeps the frame loop running while visible. |
+
+The bar is 3 DIPs tall, centered in `rect`.
+
+## ScrollBar
+
+```cpp
+explicit ScrollBar(std::function<void(float to, bool glide)> onScroll);
+```
+
+A vertical scroll bar that follows WinUI: hidden, a thin indicator while the page is
+scrolled or the pointer is over it, and expanded with arrows when the pointer rests on
+it. When Windows' "Always show scrollbars" setting is on, it stays expanded.
+
+The page sets these on every `Layout()`:
+
+| Member | Description |
+|---|---|
+| `D2D1_RECT_F rect` | Its position. `ScrollBar::kSize` (12) DIPs wide. |
+| `D2D1_RECT_F area` | The scrolling area. Pointer movement over it shows the indicator. |
+| `float viewport` | Visible height of the scrolling area. |
+| `float extent` | Full height of the content. |
+| `float value` | Current scroll position, 0 to `extent - viewport`. |
+| `float drawn` | The position the content is drawn at. Equal to `value` unless the page glides. |
+| `bool visible` | Set false when there is nothing to scroll. |
+
+| Member | Description |
+|---|---|
+| `onScroll(float to, bool glide)` | The bar asks the page to scroll to `to`. `glide` is false while the thumb is dragged, when the content must follow the pointer exactly. |
+| `void Wake()` | Shows the indicator and restarts its 2-second timeout. Call it when the page scrolls. |
+| `void Poll()` | Updates the bar's state and timers. Call it after `Wake()`. |
+| `UINT_PTR stateTimer`, `repeatTimer` | Timer ids, 4 and 5 by default. A second bar in the same window needs two other ids. |
+
+Make the bar once, set `persistent` on it, and reposition it in each `Layout()`. See
+[Scrolling](window.md#scrolling).

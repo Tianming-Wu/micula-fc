@@ -1,0 +1,69 @@
+# Micula documentation
+
+| Page | Contents |
+|---|---|
+| [Window](window.md) | `Window`: creating a window, page callbacks, input, scrolling |
+| [Controls](controls.md) | The nine controls |
+| [Custom controls](widget.md) | `Widget`, the base class of every control |
+| [Drawing](drawing.md) | `Painter`, palette, fonts, metrics, icons, animation helpers |
+
+## Headers
+
+| Header | Contents |
+|---|---|
+| `micula/micula.h` | The one to include. Includes the others and defines `MICULA_VERSION_MAJOR`, `_MINOR`, `_PATCH` and `MICULA_VERSION_STRING`. |
+| `micula/theme.h` | Palette, fonts, metrics, icon code points, animation curves, system theme queries |
+| `micula/window.h` | `Window`, `Widget`, `Painter`, clipboard and DPI helpers |
+| `micula/widgets.h` | The controls |
+
+Everything is in namespace `micula`.
+
+## Concepts
+
+### The page is rebuilt, not updated
+
+A window keeps its state in its own fields. `Layout()` removes the controls and creates
+them again from those fields. It runs when the window is created, resized or moved to a
+monitor with another DPI, and whenever the page calls it.
+
+- A control's callback writes the page's field. The control itself is discarded by the
+  next `Layout()`.
+- Don't keep a pointer to a control across `Layout()` unless the control is
+  `persistent`.
+- `Layout()` may be called from inside a control's callback. Controls removed while a
+  message is being handled are destroyed after it returns.
+
+### Coordinates
+
+All positions and sizes are DIPs (1/96 inch). The render target carries the DPI, so
+nothing is scaled by hand. `Window::scale()` converts DIPs to pixels for Win32 calls
+that need pixels.
+
+The title bar is the top `kCaptionH` (32) DIPs of the client area. It is painted after
+the page, over anything drawn there.
+
+### Painting order
+
+1. Background: transparent over Mica, `pal.windowBg` without it.
+2. `Window::PaintPage()`.
+3. Controls with `z == 0`, then controls with `z == 1` (an open drop-down). Within each,
+   controls that don't scroll come first, then scrolling controls, clipped to
+   `ClipRect()` and offset by `ContentTransform()`.
+4. The title bar.
+
+Within a group, controls are painted in the order they were added.
+
+### Animation
+
+While nothing moves, the window waits in `GetMessage` and uses no CPU. When a control's
+`Animating()` or the page's `AnimationWanted()` returns true, it runs a frame loop until
+both are false. Each frame calls `Tick(dt)` on every control and `OnTick(dt)` on the
+page, then paints. Frames follow the compositor clock on Windows 11 and a
+high-resolution timer at the display's refresh rate on Windows 10.
+
+### Requirements
+
+- COM initialized on the UI thread, apartment-threaded, before `Window::Create`.
+- Per-monitor DPI awareness, from the manifest or `EnablePerMonitorDpi()`.
+- Timer IDs 2 and 4 to 7 belong to Micula.
+- Call everything from the thread that created the window.
