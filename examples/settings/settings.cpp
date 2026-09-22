@@ -1,20 +1,25 @@
 // Settings window for a made-up folder cleanup tool, laid out like Windows 11's
 // Settings app: navigation on the left, cards on the right. It is the window in the
-// README screenshot. Nothing here touches the file system.
+// README screenshot. Browse opens the system folder picker; nothing is moved or deleted.
 
 #include <micula/micula.h>
+
+#include <shobjidl.h>
 
 #include <cwchar>
 #include <string>
 #include <vector>
 
+#pragma comment(lib, "shell32.lib")
+
 using namespace micula;
 
 namespace {
 
-constexpr float kNavW    = 240.0f;
+constexpr float kNavW    = 184.0f;
 constexpr float kCardH   = 68.0f;
 constexpr float kCardGap = 4.0f;
+constexpr float kInset   = 18.0f;   // card padding, left and right
 
 // Segoe Fluent Icons code points that theme.h does not name.
 constexpr const wchar_t *kIconDelete   = L"\uE74D";
@@ -38,6 +43,35 @@ std::wstring Gb(float v) {
     wchar_t b[16];
     swprintf(b, 16, L"%d GB", (int)(v + 0.5f));
     return b;
+}
+
+// The system folder picker, opened at `start` if it exists. Empty if cancelled.
+std::wstring PickFolder(HWND owner, const std::wstring &start) {
+    std::wstring out;
+    IFileOpenDialog *dlg = nullptr;
+    if (FAILED(CoCreateInstance(__uuidof(FileOpenDialog), nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&dlg))))
+        return out;
+    DWORD opts = 0;
+    dlg->GetOptions(&opts);
+    dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+    IShellItem *at = nullptr;
+    if (!start.empty() &&
+        SUCCEEDED(SHCreateItemFromParsingName(start.c_str(), nullptr, IID_PPV_ARGS(&at)))) {
+        dlg->SetFolder(at);
+        at->Release();
+    }
+    IShellItem *item = nullptr;
+    if (SUCCEEDED(dlg->Show(owner)) && SUCCEEDED(dlg->GetResult(&item))) {
+        PWSTR path = nullptr;
+        if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+            out = path;
+            CoTaskMemFree(path);
+        }
+        item->Release();
+    }
+    dlg->Release();
+    return out;
 }
 
 }  // namespace
@@ -74,7 +108,7 @@ struct Settings : Window {
 
     const wchar_t *ClassName() const override { return L"MiculaSettings"; }
     const wchar_t *Title() const override { return L"Folder Cleanup"; }
-    void MinSize(int *w, int *h) const override { *w = 760; *h = 580; }
+    void MinSize(int *w, int *h) const override { *w = 680; *h = 600; }
 
     void ApplyTheme() {
         const bool dark = theme == 0 ? SystemUsesDarkTheme() : theme == 2;
@@ -110,22 +144,22 @@ void Settings::Layout() {
         ny += 40;
     }
 
-    const float left = kNavW + 16, right = w - 32;
-    float y = kCaptionH + 64;
+    const float left = kNavW + 12, right = w - 24;
+    float y = kCaptionH + 60;
     auto heading = [&](const wchar_t *text) {
         y += 16;
         headings.push_back({ y, text });
         y += 32;
     };
-    // Adds a card and returns the rectangle for its control.
+    // Adds a card and returns the rectangle for its control, on the right of the first row.
     auto card = [&](const wchar_t *icon, std::wstring title, std::wstring detail,
-                    float controlW) {
-        const D2D1_RECT_F r = { left, y, right, y + kCardH };
-        const float slot = right - 20 - controlW;
+                    float controlW, float height = kCardH) {
+        const D2D1_RECT_F r = { left, y, right, y + height };
+        const float slot = right - kInset - controlW;
         cards.push_back({ r, icon, std::move(title), std::move(detail), slot, L"", nullptr });
-        y += kCardH + kCardGap;
-        const float cy = (r.top + r.bottom) / 2;
-        return D2D1_RECT_F{ slot, cy - metric::kControlH / 2, right - 20,
+        y += height + kCardGap;
+        const float cy = r.top + kCardH / 2;
+        return D2D1_RECT_F{ slot, cy - metric::kControlH / 2, right - kInset,
                             cy + metric::kControlH / 2 };
     };
     auto toggle = [&](const wchar_t *icon, const wchar_t *title, const wchar_t *detail,
@@ -140,31 +174,47 @@ void Settings::Layout() {
     switch (page) {
     case 0: {
         toggle(kIconDelete, L"Clean up automatically",
-               L"Move files you haven't opened in a while to the archive folder", &autoClean);
+               L"Move files you haven't opened in a while", &autoClean);
         Add(new DropDown({ L"1 day", L"1 week", L"2 weeks", L"30 days", L"60 days", L"90 days" },
                          olderThan, [this](int i) { olderThan = i; }))
             ->rect = card(kIconRecent, L"Move files older than",
-                          L"Counted from the last time a file was opened", 160);
+                          L"Counted from when a file was last opened", 140);
         Add(new Slider(freeGb, 5.0f, 100.0f, 5.0f, [this](float v) {
             freeGb = v;
             if (freeCard < cards.size()) cards[freeCard].aside = Gb(v);
         }))->rect = card(kIconDrive, L"Keep free space above",
-                         L"Clean up early when space runs low", 200);
+                         L"Start early when space runs low", 150);
         freeCard = cards.size() - 1;
         cards.back().aside = Gb(freeGb);
-        TextBox *t = Add(new TextBox());
-        t->SetText(archive);
-        t->pathField = true;
-        t->onChange = [this](const std::wstring &s) { archive = s; };
-        t->rect = card(glyph::kFolder, L"Archive folder", L"Where moved files go", 260);
+
+        // Two rows: the path field and its Browse button sit under the title, as a pair.
+        card(glyph::kFolder, L"Archive folder", L"Where moved files go", 0, 112);
+        {
+            const D2D1_RECT_F r = cards.back().r;
+            const float row = r.top + kCardH - 4;
+            Button *browse = Add(new Button(L"Browse", ButtonStyle::Standard, [this] {
+                const std::wstring picked = PickFolder(hwnd, archive);
+                if (picked.empty()) return;
+                archive = picked;
+                Layout();   // the field is rebuilt from `archive`
+                Invalidate();
+            }));
+            const float bw = browse->PreferredWidth(measure);
+            browse->rect = { r.right - kInset - bw, row, r.right - kInset, row + metric::kControlH };
+            TextBox *t = Add(new TextBox());
+            t->SetText(archive);
+            t->pathField = true;
+            t->onChange = [this](const std::wstring &s) { archive = s; };
+            t->rect = { r.left + 50, row, browse->rect.left - 8, row + metric::kControlH };
+        }
 
         heading(L"Appearance");
         Add(new Segmented({ L"System", L"Light", L"Dark" }, theme, [this](int i) {
             theme = i;
             ApplyTheme();
-        }))->rect = card(kIconColor, L"Theme", L"Follow Windows, or pick one for this app", 240);
+        }))->rect = card(kIconColor, L"Theme", L"Follow Windows or pick one", 210);
 
-        y += 12;
+        y += 8;
         footerY = y;
         Button *run = Add(new Button(L"Clean up now", ButtonStyle::Accent, [] {}));
         Button *log = Add(new Button(L"View log", ButtonStyle::Standard, [] {}));
@@ -176,20 +226,20 @@ void Settings::Layout() {
     case 1:
         Add(new Segmented({ L"At sign-in", L"Daily", L"Weekly" }, when,
                           [this](int i) { when = i; }))
-            ->rect = card(kIconCalendar, L"Run", L"When a cleanup starts", 300);
+            ->rect = card(kIconCalendar, L"Run", L"When a cleanup starts", 250);
         Add(new DropDown({ L"Midnight", L"2:00", L"4:00", L"6:00", L"Noon", L"18:00" }, hour,
                          [this](int i) { hour = i; }))
-            ->rect = card(kIconRecent, L"Time of day", L"For daily and weekly cleanups", 160);
-        toggle(kIconBattery, L"Run on battery power",
-               L"Off by default, so a laptop is not woken to tidy up", &onBattery);
+            ->rect = card(kIconRecent, L"Time of day", L"For daily and weekly cleanups", 140);
+        toggle(kIconBattery, L"Run on battery power", L"Off by default to save battery",
+               &onBattery);
         break;
     case 2: {
         toggle(glyph::kFolder, L"Downloads", L"Files saved by browsers and other apps",
                &downloads);
         toggle(glyph::kFolder, L"Desktop", L"Loose files on the desktop", &desktop);
         toggle(kIconCamera, L"Screenshots", L"Pictures\\Screenshots", &screenshots);
-        Button *add = Add(new Button(L"Browse", ButtonStyle::Standard, [] {}));
-        add->rect = card(kIconAdd, L"Add a folder", L"Any folder can be cleaned up the same way",
+        Button *add = Add(new Button(L"Add folder", ButtonStyle::Standard, [] {}));
+        add->rect = card(kIconAdd, L"More folders", L"Any folder can be cleaned up the same way",
                          add->PreferredWidth(measure));
         break;
     }
@@ -205,6 +255,7 @@ void Settings::Layout() {
 void Settings::PaintPage(const Painter &p) {
     const Palette &c = *p.pal;
     const float w = ClientW();
+    const float left = kNavW + 12;
 
     // Windows 11's navigation selection: a subtle fill and a short accent bar.
     if (navSel.right > navSel.left) {
@@ -213,37 +264,37 @@ void Settings::PaintPage(const Painter &p) {
         p.FillRound({ navSel.left, cy - 8, navSel.left + 3, cy + 8 }, 1.5f, c.accent);
     }
 
-    p.Text(kNav[page].label, { kNavW + 16, kCaptionH + 8, w - 32, kCaptionH + 56 },
-           p.font->title, c.textPrimary);
+    p.Text(kNav[page].label, { left, kCaptionH + 8, w - 24, kCaptionH + 52 }, p.font->title,
+           c.textPrimary);
 
     for (const auto &h : headings)
-        p.Text(h.second, { kNavW + 16, h.first, w - 32, h.first + 32 }, p.font->bodyStrong,
+        p.Text(h.second, { left, h.first, w - 24, h.first + 32 }, p.font->bodyStrong,
                c.textPrimary);
 
     for (const Card &cd : cards) {
         const D2D1_RECT_F &r = cd.r;
         p.FillRound(r, metric::kRadiusControl, c.cardBg);
         p.StrokeRound(r, metric::kRadiusControl, c.cardStroke);
-        p.Text(cd.icon, { r.left + 20, r.top, r.left + 40, r.bottom }, p.font->icon,
-               c.textPrimary);
+        p.Text(cd.icon, { r.left + kInset, r.top, r.left + kInset + 20, r.top + kCardH },
+               p.font->icon, c.textPrimary);
 
         float textRight = cd.slotLeft - 16;
         const std::wstring aside = cd.onOff ? (*cd.onOff ? L"On" : L"Off") : cd.aside;
         if (!aside.empty()) {
             const float aw = p.MeasureWidth(aside, p.font->body);
-            p.Text(aside, { cd.slotLeft - 12 - aw, r.top, cd.slotLeft - 11, r.bottom },
+            p.Text(aside, { cd.slotLeft - 12 - aw, r.top, cd.slotLeft - 11, r.top + kCardH },
                    p.font->body, c.textPrimary);
             textRight = cd.slotLeft - 12 - aw - 16;
         }
-        p.Text(cd.title, { r.left + 56, r.top + 13, textRight, r.top + 33 }, p.font->body,
+        p.Text(cd.title, { r.left + 50, r.top + 13, textRight, r.top + 33 }, p.font->body,
                c.textPrimary);
-        p.Text(cd.detail, { r.left + 56, r.top + 33, textRight, r.top + 53 }, p.font->caption,
+        p.Text(cd.detail, { r.left + 50, r.top + 33, textRight, r.top + 53 }, p.font->caption,
                c.textSecondary);
     }
 
     if (footerY >= 0.0f)
         p.Text(L"Last cleanup 2 hours ago, 1.4 GB moved",
-               { kNavW + 16, footerY, w - 300, footerY + metric::kControlH }, p.font->caption,
+               { left, footerY, w - 260, footerY + metric::kControlH }, p.font->caption,
                c.textSecondary);
 }
 
@@ -253,7 +304,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, wchar_t *, int) {
     int code = 1;
     {
         Settings s;
-        if (s.Create(860, 580, true, nullptr)) code = s.Run();
+        if (s.Create(700, 570, true, nullptr)) code = s.Run();
     }
     CoUninitialize();
     return code;
