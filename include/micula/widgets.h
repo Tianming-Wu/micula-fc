@@ -988,6 +988,13 @@ struct DropDown : Widget {
     std::function<void(int)> onChange;
     bool open = false;
     float rowH = 32.0f;
+    // Whether the choice is a ring. Off, the list has two ends, and a step past one of them
+    // has nowhere to go -- which is what the knock is for. On, the step past the last option
+    // arrives at the first: the wheel's, Up and Down's, and either of them while the list is
+    // closed as well as open, because a control whose keys and wheel disagree about its ends
+    // is a control with two answers. The list's own scroll bar is not part of this: a bar has
+    // two ends by definition, and so does the room the popup is shown through.
+    bool wrapAround = false;
     // How far the lid is open: 0 is the control's own row and nothing else, 1 is the whole
     // popup. Fluent expands a flyout out of the control it belongs to rather than blinking
     // it on, and on the way out it collapses back into it rather than vanishing -- which is
@@ -1069,7 +1076,10 @@ struct DropDown : Widget {
     int knockDir = 0;          // -1 up a list, +1 down it
     bool knockHeld = false;    // still in the rise, which is where the two differ
     static constexpr float kKnockRise = 0.03f;    // seconds for the fast edge to arrive
-    static constexpr float kKnockFollow = 0.09f;  // and for the one behind it
+    // And the time constant for the edge behind it, which is an approach rather than a ramp
+    // and so is *fastest* in its first instant: three of these is 95 % of the way, which is
+    // the tenth of a second a ramp over the same distance used to take.
+    static constexpr float kKnockFollow = 0.03f;
     static constexpr float kKnockLag = 0.12f;     // and for both to spring back
     static constexpr float kKnockTip = 2.0f;      // DIPs the fast edge moves
     static constexpr float kKnockShove = 6.0f;    // and the edge that follows it
@@ -1188,6 +1198,17 @@ struct DropDown : Widget {
         if (owner) owner->Invalidate();
         return moved;
     }
+    // One step of the choice, which is what the wheel, Up and Down and the bar's arrows all
+    // amount to. Past either end it wraps when `wrapAround` is set and otherwise goes
+    // nowhere -- Select clamps, so a step that ran off an end is the option it started from
+    // and reports that nothing moved, which is what the callers read as nowhere to go.
+    bool Step(int dir) {
+        const int n = (int)options.size();
+        if (n <= 0) return false;
+        const int want = selected + dir;
+        if (!wrapAround) return Select(want);
+        return Select(((want % n) + n) % n);
+    }
     // A gesture with nowhere to go -- the wheel or Up and Down at the end of the list -- is
     // answered by the mark giving way the way it was pressed and coming back. `dir` is +1 for
     // down a list, -1 for up it, which is the direction the gesture was going.
@@ -1223,9 +1244,19 @@ struct DropDown : Widget {
 
     // Which option is at this point. -1 for anything outside the panel as it is drawn right
     // now -- a row the panel has not slid over yet is not there -- and for the bar.
+    //
+    // Boxed in on all four sides, and it has to be: this is the box the pointer is in when a
+    // row is lit, and it is not the window. The sides matter because the popup is narrow --
+    // the control's own width -- and the height alone lit a row for a pointer resting beside
+    // it, on the card's title a hand's width away. `Bounds` matters for the same reason one
+    // step out: the lid reaches over the title bar whenever the chosen row is low enough in
+    // the list, and a pointer dragging the window sits exactly there. Rows the page has cut
+    // away are not lit either, because they are not drawn -- see Bounds for the strip.
     int RowAt(float x, float y) const {
         const D2D1_RECT_F s = Shown();
+        if (x < s.left || x >= s.right) return -1;
         if (y < s.top || y >= s.bottom) return -1;
+        if (!Inside(Bounds(), x, y)) return -1;
         if (BarShown() && Inside(bar->rect, x, y)) return -1;
         const int i = (int)std::floor((y - RowLine()) / rowH + slid);
         return (i >= 0 && i < (int)options.size()) ? i : -1;
@@ -1315,9 +1346,17 @@ struct DropDown : Widget {
         // and held, the one behind it following in three times that, and both springing back
         // in about a fifth. A lean and a spring rather than a move.
         if (knockHeld) {
+            // Both edges set off on this frame, and everything the gesture shows comes of
+            // that. The edge behind goes three times as far, so a ramp for it -- three times
+            // the distance in three times the time -- would run at exactly the fast edge's
+            // rate, and the two of them would move as one for the first thirtieth of a second
+            // while the mark slid bodily down and did not shorten at all; which is what this
+            // was, and what made it read as the far edge starting late. An approach is fastest
+            // in its first instant, so the mark begins losing length at once, and the fast
+            // edge still arrives first because its distance is the short one.
             knock = (std::min)(knock + dt / kKnockRise, 1.0f);
-            knockLag = (std::min)(knockLag + dt / kKnockFollow, 1.0f);
-            if (knock >= 1.0f && knockLag >= 1.0f) knockHeld = false;
+            knockLag = 1.0f - (1.0f - knockLag) * std::exp(-dt / kKnockFollow);
+            if (knock >= 1.0f && knockLag >= 0.95f) knockHeld = false;
         } else if (knock > 0.0f || knockLag > 0.0f) {
             knock *= std::exp(-dt / kKnockLag);
             knockLag *= std::exp(-dt / kKnockLag);
@@ -1363,14 +1402,15 @@ struct DropDown : Widget {
         const int n = (int)options.size();
         if (n <= 0) return false;
         // Open, a step goes through Select like the wheel's does, so the rows slide under
-        // the control as the choice moves. Closed there is nothing to slide, and the only
-        // thing a list can do that a scroll cannot is wrap.
+        // the control as the choice moves -- and a step that runs off an end is a gesture with
+        // nowhere to go, which is the knock's. Closed, the label is the only thing that moves
+        // and there is no mark on screen to give way, so the ends are silent.
         if (open) {
             const int dir = vk == VK_DOWN ? 1 : -1;
-            if (!Select(selected + dir)) Knock(dir);
+            if (!Step(dir) && !wrapAround) Knock(dir);
             return true;
         }
-        Select((selected + (vk == VK_DOWN ? 1 : n - 1)) % n);
+        Step(vk == VK_DOWN ? 1 : -1);
         return true;
     }
     // A printable character, from the keyboard or the IME. Always the control's, whether or
@@ -1444,7 +1484,9 @@ struct DropDown : Widget {
         // list away with it.
         const int step = (int)std::lround(-notches);
         const int dir = step != 0 ? step : (notches > 0.0f ? -1 : 1);
-        if (!Select(selected + dir)) Knock(dir > 0 ? 1 : -1);
+        // A ring has no end to run into, so there is nothing for the mark to give way to:
+        // the step either moves the choice or has come all the way round to where it was.
+        if (!Step(dir) && !wrapAround) Knock(dir > 0 ? 1 : -1);
         if (BarShown()) { bar->Wake(); bar->Poll(); }
         return true;
     }

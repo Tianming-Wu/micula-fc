@@ -242,16 +242,21 @@ void Settings::Layout() {
         log->rect = { right - rw - 8 - lw, y, right - rw - 8, y + metric::kControlH };
         break;
     }
-    case 1:
+    case 1: {
         Add(new Segmented({ L"At sign-in", L"Daily", L"Weekly" }, when,
                           [this](int i) { when = i; }))
             ->rect = card(kIconCalendar, L"Run", L"When a cleanup starts", 250);
-        Add(new DropDown({ L"Midnight", L"2:00", L"4:00", L"6:00", L"Noon", L"18:00" }, hour,
-                         [this](int i) { hour = i; }))
-            ->rect = card(kIconRecent, L"Time of day", L"For daily and weekly cleanups", 140);
+        DropDown *day =
+            Add(new DropDown({ L"Midnight", L"2:00", L"4:00", L"6:00", L"Noon", L"18:00" }, hour,
+                             [this](int i) { hour = i; }));
+        // Times of day are a ring, and the wheel over the list says so: the step past 18:00
+        // is after midnight. See DropDown::wrapAround.
+        day->wrapAround = true;
+        day->rect = card(kIconRecent, L"Time of day", L"For daily and weekly cleanups", 140);
         toggle(kIconBattery, L"Run on battery power", L"Off by default to save battery",
                &onBattery);
         break;
+    }
     case 2: {
         toggle(glyph::kFolder, L"Downloads", L"Files saved by browsers and other apps",
                &downloads);

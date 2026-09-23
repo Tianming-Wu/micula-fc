@@ -147,8 +147,9 @@ DropDown(std::vector<std::wstring> options, int selected, std::function<void(int
 |---|---|
 | `std::vector<std::wstring> options` | The list. |
 | `int selected` | Index of the selected option. |
-| `std::function<void(int)> onChange` | Called with the new index when a different row is clicked, or on Up and Down (which wrap around while the list is closed). |
+| `std::function<void(int)> onChange` | Called with the new index when a different row is clicked, or on Up and Down (which step through the list while it is closed). |
 | `bool open` | Whether the list is showing. Read only. |
+| `bool wrapAround` | Whether the choice is a ring. Off by default: a step past either end has nowhere to go. |
 
 Click, Space or Enter opens the list; a click on a row chooses it; Esc, a click
 elsewhere or deactivating the window closes it. Space and Enter close it as well, keeping
@@ -166,6 +167,12 @@ row -- 32 DIPs -- per step, so the row that arrives is on the control's own row 
 that was there has left it. That is what a notch of the wheel over an open list does, and
 Up and Down, and dragging the list's scroll bar.
 
+With `wrapAround` the choice is a ring and those two ends are the same end: a step past the
+last option arrives at the first, from the wheel or from Up and Down, and whether the list
+is open or closed -- a control whose keys and wheel disagree about its ends has two answers.
+The list's own scroll bar is not part of it, and neither is the room the popup is shown
+through: both have two ends.
+
 The accent mark is drawn on the control's own row and stays there: the list slides past it,
 so which option is under the mark is the choice, and the mark itself never travels.
 
@@ -178,14 +185,19 @@ result on.
 
 A gesture with nowhere to go is answered by the mark: a letter that matches nothing makes
 it shrink for a moment, and the wheel or Up and Down at the end of the list makes it give
-way the way it was pressed -- the edge being pushed towards moves a little and quickly, the
-other follows it further, so the mark is shorter while it lasts -- and then spring back.
+way the way it was pressed -- both edges set off together, the one being pushed towards
+more briefly and a shorter distance, the other further and easing into place, so the mark
+is shorter from the first frame and never longer -- and then both spring back. With
+`wrapAround` there is no end for the wheel or the keys to reach, so the mark gives way for
+a letter that matched nothing and for nothing else.
 
 The panel is as tall as the list and is not cut to the room it has: where the room runs out
 the page clips it, and the far end of the list is what goes out of sight -- never the chosen
-row, which stays on the control. Its scroll bar appears when the list is taller than that
-room, which is `ClipRect()` or, on a page that does not scroll, the client area below the
-title bar.
+row, which stays on the control. The same room decides what a pointer can reach: a row is
+only ever lit, and only ever chosen, where it is drawn and inside the popup's own box, so
+neither the title bar nor the space beside the control is part of the list. Its scroll bar
+appears when the list is taller than that room, which is `ClipRect()` or, on a page that
+does not scroll, the client area below the title bar.
 
 `rect` must be 32 DIPs tall: while the list is open, `rect` grows to cover it. An open
 list's scroll bar uses timers 6 and 7.
