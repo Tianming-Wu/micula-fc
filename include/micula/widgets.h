@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 #include <functional>
 #include <string>
 #include <vector>
@@ -1036,6 +1037,50 @@ struct DropDown : Widget {
     // The press went down on the bar, so letting go is not choosing a row.
     bool barGrab = false;
 
+    // Typing to find an option. The control is a list of words, so the keyboard can be a
+    // search: the letters go into a prefix, the option that starts with it is chosen, and an
+    // open list slides to it. Windows' own combo boxes do this, and it needs no field, no
+    // layout and nothing drawn -- the chosen option's label is already on the control.
+    //
+    // The prefix is forgotten after a second of quiet, and whenever the list opens or closes:
+    // it is a way of pointing at one option, not a query that stays.
+    std::wstring typed;
+    ULONGLONG typedAt = 0;
+    static constexpr ULONGLONG kTypeWindow = 1000;   // ms
+
+    // What a letter that found nothing does. A control that swallows a key in silence looks
+    // broken, and the window's answer to a key nobody took is a beep -- a complaint from the
+    // operating system rather than from the thing that did not move. So the mark is the
+    // answer: it shrinks for a moment and springs back. Heard, and nowhere to go with it.
+    //
+    // Full at the instant of the refusal and decaying from there, which is the shape that
+    // needs no state beyond the number itself: a curve with a duration would have to be
+    // turned round at the end of itself to come back.
+    float refuse = 0.0f;
+    static constexpr float kRefuseLag = 0.07f;       // seconds
+
+    // And what a gesture that had nowhere to go does -- the wheel, or Up and Down, at the end
+    // of the list. A different shape, because it is a different thing to say: not "no", but
+    // "that way, and no further". The edge the gesture is going towards twitches quickly and a
+    // short way and holds there; the other edge follows it, more slowly and further, so the
+    // mark is *shorter* for as long as either of them is out. Then both spring back.
+    float knock = 0.0f;        // the fast edge's impulse, 0..1
+    float knockLag = 0.0f;     // and the edge that follows it, which goes further
+    int knockDir = 0;          // -1 up a list, +1 down it
+    bool knockHeld = false;    // still in the rise, which is where the two differ
+    static constexpr float kKnockRise = 0.03f;    // seconds for the fast edge to arrive
+    static constexpr float kKnockFollow = 0.09f;  // and for the one behind it
+    static constexpr float kKnockLag = 0.12f;     // and for both to spring back
+    static constexpr float kKnockTip = 2.0f;      // DIPs the fast edge moves
+    static constexpr float kKnockShove = 6.0f;    // and the edge that follows it
+
+    static bool StartsWith(const std::wstring &s, const std::wstring &prefix) {
+        if (prefix.size() > s.size()) return false;
+        for (size_t i = 0; i < prefix.size(); i++)
+            if ((wchar_t)std::towlower(s[i]) != prefix[i]) return false;
+        return true;
+    }
+
     bool Focusable() const override { return true; }
     bool TracksPointer() const override { return open; }
     D2D1_RECT_F Head() const { return open ? head : rect; }
@@ -1091,7 +1136,14 @@ struct DropDown : Widget {
     D2D1_RECT_F Rest() const { return FrameAt((float)selected); }  // where it belongs
     // Everything that follows from the chosen row: the area the mouse can reach and the bar.
     // The rows themselves need no telling -- RowTop reads `slid`.
+    //
+    // Only while the list is open. Closed there is no popup to reach into, and `head` is
+    // whatever the last one left behind -- or nothing at all, if there has never been one --
+    // so a choice made from the keyboard while closed would have rewritten the control's own
+    // rectangle out of a popup that does not exist. SetOpen puts all of this right before the
+    // list is seen again.
     void Sync() {
+        if (!open) return;
         const D2D1_RECT_F f = Rest();
         rect = { head.left, (std::min)(head.top, f.top),
                  head.right, (std::max)(head.bottom, f.bottom) };
@@ -1119,17 +1171,31 @@ struct DropDown : Widget {
 
     // The chosen row, by the wheel, the keys, a click or the bar. The panel's place and the
     // bar come out of it -- see Sync -- so there is nothing here to keep in step by hand.
-    void Select(int i) {
+    //
+    // Returns whether the choice actually moved, which is what tells a gesture that had
+    // nowhere to go from one that had: see Knock.
+    bool Select(int i) {
         const int n = (int)options.size();
-        if (n <= 0) return;
+        if (n <= 0) return false;
         i = std::clamp(i, 0, n - 1);
-        if (i != selected) {
+        const bool moved = (i != selected);
+        if (moved) {
             selected = i;
             Sync();
             if (onChange) onChange(selected);
         }
         if (BarShown()) { bar->Wake(); bar->Poll(); }
         if (owner) owner->Invalidate();
+        return moved;
+    }
+    // A gesture with nowhere to go -- the wheel or Up and Down at the end of the list -- is
+    // answered by the mark giving way the way it was pressed and coming back. `dir` is +1 for
+    // down a list, -1 for up it, which is the direction the gesture was going.
+    void Knock(int dir) {
+        knock = 0.0f;
+        knockLag = 0.0f;
+        knockHeld = true;
+        knockDir = dir;
     }
     // The bar, which works in DIPs while the list works in rows. A step smaller than a row
     // still moves a row: an arrow that did nothing would be an arrow that is broken.
@@ -1167,6 +1233,8 @@ struct DropDown : Widget {
 
     void SetOpen(bool o) {
         barGrab = false;
+        // A list being opened or closed is a fresh gesture at the keyboard.
+        typed.clear();
         if (o) {
             head = { rect.left, rect.top, rect.right, rect.top + metric::kControlH };
             open = true;
@@ -1213,7 +1281,9 @@ struct DropDown : Widget {
     void Dismiss() override { if (open) SetOpen(false); }
     bool Animating() const override {
         return Widget::Animating() || openT.Wants(open ? 1.0f : 0.0f) ||
-               (open && slid != (float)selected) || (BarShown() && bar->Animating());
+               (open && slid != (float)selected) || refuse > 0.0f || knockHeld ||
+               knock > 0.0f || knockLag > 0.0f ||
+               (BarShown() && bar->Animating());
     }
     void Tick(float dt) override {
         Widget::Tick(dt);
@@ -1235,6 +1305,24 @@ struct DropDown : Widget {
         } else if (!openT.Step(dt, motion::kFast, motion::Accel)) {
             z = 0;          // the lid has finished closing; stop keeping it raised
         }
+        // The refusal, if there is one: an impulse that fades, so a letter with nowhere to go
+        // is answered for about a fifth of a second and then is not.
+        if (refuse > 0.0f) {
+            refuse *= std::exp(-dt / kRefuseLag);
+            if (refuse < 0.002f) refuse = 0.0f;
+        }
+        // And the knock at the end of the list: the fast edge out in a thirtieth of a second
+        // and held, the one behind it following in three times that, and both springing back
+        // in about a fifth. A lean and a spring rather than a move.
+        if (knockHeld) {
+            knock = (std::min)(knock + dt / kKnockRise, 1.0f);
+            knockLag = (std::min)(knockLag + dt / kKnockFollow, 1.0f);
+            if (knock >= 1.0f && knockLag >= 1.0f) knockHeld = false;
+        } else if (knock > 0.0f || knockLag > 0.0f) {
+            knock *= std::exp(-dt / kKnockLag);
+            knockLag *= std::exp(-dt / kKnockLag);
+            if (knock < 0.002f && knockLag < 0.002f) { knock = knockLag = 0.0f; knockDir = 0; }
+        }
         if (BarShown()) {
             SyncBar();
             // The bar is not in the window's list, so nothing else tells it the pointer
@@ -1247,7 +1335,14 @@ struct DropDown : Widget {
         }
     }
 
-    void OnClick() override {
+    void OnClick() override { Pick(true); }
+    void OnActivate() override { Pick(false); }
+    // One path for both, because everything but the choice itself is the same: opening the
+    // list, the bar's press, and the close. `byPointer` is the whole difference -- a click is
+    // the pointer naming a row, and Space or Enter is naming nothing, which is the row the
+    // accent mark has been left on. Reading the pointer for those chose whichever row happened
+    // to be under a mouse that was resting somewhere else on the screen entirely.
+    void Pick(bool byPointer) {
         if (!enabled) return;
         // A press on the list's bar scrolls it. It does not choose, and it does not close.
         if (barGrab) { barGrab = false; return; }
@@ -1255,7 +1350,7 @@ struct DropDown : Widget {
         // Through the same function the drawing uses, so the row that was lit and the row
         // that is chosen cannot come apart.
         const D2D1_POINT_2F at = Cursor();
-        const int i = RowAt(at.x, at.y);
+        const int i = byPointer ? RowAt(at.x, at.y) : selected;
         if (i >= 0) Select(i);
         SetOpen(false);
     }
@@ -1271,10 +1366,43 @@ struct DropDown : Widget {
         // the control as the choice moves. Closed there is nothing to slide, and the only
         // thing a list can do that a scroll cannot is wrap.
         if (open) {
-            Select(selected + (vk == VK_DOWN ? 1 : -1));
+            const int dir = vk == VK_DOWN ? 1 : -1;
+            if (!Select(selected + dir)) Knock(dir);
             return true;
         }
         Select((selected + (vk == VK_DOWN ? 1 : n - 1)) % n);
+        return true;
+    }
+    // A printable character, from the keyboard or the IME. Always the control's, whether or
+    // not it found anything: a letter that matched nothing and was passed on to the window
+    // would be answered with a beep.
+    //
+    // **Only while the list is open.** A closed drop-down is a button with a label on it: it
+    // has nothing to search in, and the mark that would show what the search found is not on
+    // screen. Space opens it, and the search is there.
+    bool OnChar(wchar_t ch) override {
+        const int n = (int)options.size();
+        if (!enabled || n <= 0) return false;
+        if (!open) return true;      // consumed, so the window does not beep at it
+        const ULONGLONG now = GetTickCount64();
+        const wchar_t lower = (wchar_t)std::towlower(ch);
+        // The same letter again steps to the next option that starts with it rather than
+        // looking for the prefix it is already on. That is what Windows does, and it is the
+        // only way to reach the second "Monthly" from the keyboard.
+        const bool again = typed.size() == 1 && typed[0] == lower;
+        if (again || now - typedAt > kTypeWindow) typed.clear();
+        typedAt = now;
+        typed.push_back(lower);
+        // From the option after the chosen one, and round: a key that has just found an option
+        // must not find the same one again. Coming back to it is still allowed, which is what
+        // refining the prefix to the option it is already on does.
+        for (int step = 1; step <= n; step++) {
+            const int i = (selected + step) % n;
+            if (StartsWith(options[i], typed)) { Select(i); return true; }
+        }
+        // Nothing starts with it. Answered rather than ignored: see `refuse`.
+        refuse = 1.0f;
+        if (owner) owner->Invalidate();
         return true;
     }
 
@@ -1315,9 +1443,28 @@ struct DropDown : Widget {
         // open list -- and on a page that lays itself out in response to a scroll, take the
         // list away with it.
         const int step = (int)std::lround(-notches);
-        Select(selected + (step != 0 ? step : (notches > 0.0f ? -1 : 1)));
+        const int dir = step != 0 ? step : (notches > 0.0f ? -1 : 1);
+        if (!Select(selected + dir)) Knock(dir > 0 ? 1 : -1);
         if (BarShown()) { bar->Wake(); bar->Poll(); }
         return true;
+    }
+
+    // The mark on the control's own row: the accent bar, which shrinks for a letter that found
+    // nothing and gives way for a gesture that had nowhere to go. Drawn by the popup, which is
+    // the only place it is: a closed drop-down has no mark, and nothing to search in either.
+    void PaintMark(const Painter &p, float alpha) {
+        const D2D1_RECT_F h = Head();
+        const float inset = 8.0f + 4.8f * refuse;    // the refusal's own shrink
+        // The knock, in DIPs of offset per edge. The fast edge is capped at what the edge
+        // behind it has already given: the mark may be shorter than it is at rest and never
+        // longer, so what the two of them do together reads as length rather than as travel.
+        const float tip = (std::min)(kKnockTip * knock, kKnockShove * knockLag);
+        const float shove = kKnockShove * knockLag;
+        const float top = RowLine() + inset + (knockDir > 0 ? shove : -tip);
+        const float bot = RowLine() + rowH - inset + (knockDir > 0 ? tip : -shove);
+        p.rt->FillRoundedRectangle(
+            D2D1::RoundedRect({ h.left + 1, top, h.left + 4, bot }, 1.5f, 1.5f),
+            p.Brush(Fade(p.pal->accent, alpha)));
     }
 
     void Paint(const Painter &p) override {
@@ -1397,10 +1544,7 @@ struct DropDown : Widget {
         // choice, and what a notch of the wheel changes is which option is under it. Nothing
         // stretches, because nothing has anywhere to go -- see motion::Span for the rule this
         // is the degenerate case of.
-        p.rt->FillRoundedRectangle(
-            D2D1::RoundedRect({ s.left + 1, RowLine() + 8, s.left + 4, RowLine() + rowH - 8 },
-                              1.5f, 1.5f),
-            p.Brush(Fade(c.accent, openF)));
+        PaintMark(p, openF);
         // The bar once the list has arrived: its line is a setter, and at full strength
         // over a list still growing it would arrive first.
         if (BarShown() && openF >= 1.0f) {

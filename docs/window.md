@@ -119,7 +119,7 @@ The next system theme change replaces it through `ReloadTheme()`.
 | Left button up | The captured control gets `OnRelease`, then `OnClick` if the pointer is still over it. |
 | Capture lost | `WM_CAPTURECHANGED` or `WM_CANCELMODE`: the drag in progress gets `OnRelease` and the capture is cleared. A button's release goes to whoever holds the capture, so a drag that loses it is ended here rather than never ending. |
 | Wheel | The control under the pointer gets `OnWheel`. If it returns false, the page gets `OnAppMessage(WM_MOUSEWHEEL, wp, lp)` with `lp` holding the pointer in client pixels. |
-| Key down | The focused control's `OnKey` first. If it returns false: Tab and Shift+Tab move focus, Space clicks the focused control, Enter clicks it or calls `OnDefaultAction()`, Esc calls `OnCancel()`. |
+| Key down | The focused control's `OnKey` first. If it returns false: Tab and Shift+Tab move focus, Space activates the focused control (`OnActivate()`), Enter activates it or calls `OnDefaultAction()`, Esc calls `OnCancel()`. |
 | Characters | `WM_CHAR` and `WM_IME_CHAR` go to the focused control's `OnChar`. Control characters are dropped. |
 | `WM_TIMER` | Timer 2 blinks the caret and 3 is the frame loop's stand-in during a size or move drag. Other ids go to each control's `OnTimer` in order, then to `OnAppMessage`. |
 | Deactivation | Every control gets `Dismiss()`, and a drag in progress gets its `OnRelease`. |

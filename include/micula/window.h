@@ -366,6 +366,14 @@ struct Widget {
     // anchor moved out from under it, and on a page that lays itself out in response to a
     // scroll the open list was thrown away with everything else.
     virtual bool OnWheel(float /*x*/, float /*y*/, float /*notches*/) { return false; }
+    // The keyboard's way of working this control: Space, and Enter on a control that has one.
+    //
+    // Distinct from `OnClick`, which is what a mouse press and release means, because a click
+    // is the *pointer* doing something and this is not. A drop-down chooses the row the
+    // pointer is over, and there is no pointer to read when the choice came from a keyboard:
+    // what Space means there is "the one the list has already arrived at". The default is a
+    // click, which is what every other control wants.
+    virtual void OnActivate() { OnClick(); }
     // A WM_TIMER the window does not own. Return true if the id was this control's.
     virtual bool OnTimer(UINT_PTR /*id*/) { return false; }
     // Something happened that should put away anything transient this control is
@@ -1867,13 +1875,13 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             self->MoveFocus((GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1);
             return 0;
         case VK_SPACE:
-            if (self->focused) { self->focused->OnClick(); self->Invalidate(); }
+            if (self->focused) { self->focused->OnActivate(); self->Invalidate(); }
             return 0;
         case VK_RETURN:
             // Enter operates the focused control if it is one that can be operated,
             // and otherwise the page's default action. Without the first half, tabbing
             // to "Browse" and pressing Enter would press the page's default button.
-            if (self->focused) self->focused->OnClick();
+            if (self->focused) self->focused->OnActivate();
             else               self->OnDefaultAction();
             self->Invalidate();
             return 0;

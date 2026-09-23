@@ -151,7 +151,9 @@ DropDown(std::vector<std::wstring> options, int selected, std::function<void(int
 | `bool open` | Whether the list is showing. Read only. |
 
 Click, Space or Enter opens the list; a click on a row chooses it; Esc, a click
-elsewhere or deactivating the window closes it.
+elsewhere or deactivating the window closes it. Space and Enter close it as well, keeping
+what the keyboard has arrived at -- the row under the accent mark -- because the keyboard
+is not pointing at a row and a mouse click is.
 
 The list opens **over the control**, with the chosen row where the control's own row is:
 what Windows 11's own combo boxes do, and what makes choosing read as swapping one name
@@ -166,6 +168,18 @@ Up and Down, and dragging the list's scroll bar.
 
 The accent mark is drawn on the control's own row and stays there: the list slides past it,
 so which option is under the mark is the choice, and the mark itself never travels.
+
+The keyboard can search, **while the list is open**: typing letters chooses the option that
+starts with what has been typed, and the list slides to it. The prefix is kept for a second
+of quiet, and pressing the same letter again steps to the next option that starts with it.
+Typing does nothing while the list is closed, which is what Space is for -- a closed
+drop-down is a button with a label on it and has no mark on screen to show a search
+result on.
+
+A gesture with nowhere to go is answered by the mark: a letter that matches nothing makes
+it shrink for a moment, and the wheel or Up and Down at the end of the list makes it give
+way the way it was pressed -- the edge being pushed towards moves a little and quickly, the
+other follows it further, so the mark is shorter while it lasts -- and then spring back.
 
 The panel is as tall as the list and is not cut to the room it has: where the room runs out
 the page clips it, and the far end of the list is what goes out of sight -- never the chosen

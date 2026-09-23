@@ -54,7 +54,8 @@ All virtual. Points are in DIPs.
 |---|---|---|
 | `void Paint(const Painter &p)` | required | Every paint while visible. |
 | `bool Focusable() const` | `false` | Return true to take focus by click and Tab. |
-| `void OnClick()` | nothing | Button released over the control, or Space or Enter while focused. |
+| `void OnClick()` | nothing | Button released over the control. A click is the pointer: the point it was released at is the point it means. |
+| `void OnActivate()` | `OnClick()` | Space, and Enter while the control is focused. Separate from `OnClick` because the keyboard has no pointer to read a position out of -- the default is to treat it as a click. |
 | `void OnPress(float x, float y)` | nothing | Button pressed on the control, at that point. |
 | `void OnDrag(float x, float y)` | nothing | Pointer moved while this control holds capture. |
 | `void OnRelease()` | nothing | Button released after `OnPress`, wherever the pointer is. Before `OnClick`. |
