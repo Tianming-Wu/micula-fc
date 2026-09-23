@@ -69,10 +69,22 @@ ToggleSwitch(std::wstring label, bool on, std::function<void(bool)> onChange);
 | `std::wstring label` | Text at the left of `rect`. Empty draws only the switch. |
 | `std::wstring detail` | Optional wrapped second line under the label. |
 | `bool on` | Current value. |
-| `std::function<void(bool)> onChange` | Called with the new value on click, Space or Enter. |
+| `std::function<void(bool)> onChange` | Called with the new value on click, on Space or Enter, and while the knob is being dragged. |
 
 The switch is 40 x 20 DIPs at the right edge of `rect`. Use a switch for a setting that
 takes effect immediately.
+
+The knob is draggable: pressing it takes hold of it, it follows the hand anywhere between
+the ends, and letting go settles it on whichever end the value came out on. A press
+anywhere else -- the rest of the track, the label -- is a click, and flips the value once.
+
+The value flips at 0.6 of the way across going on and 0.4 coming back: two points rather
+than one, so that a hand resting in the middle, or a drag crossing the middle twice, does
+not report two changes for one gesture. The fill and the knob are two animations of the
+same length -- the fill follows the value, the knob follows the hand -- so the moment the
+value changes can be seen while the knob is still being dragged. Held, the knob is a
+little larger and round: a click presses it, which Fluent draws as wider and shorter, and
+a drag carries it, which is not a press.
 
 ## Segmented
 
