@@ -688,6 +688,9 @@ struct Window {
     Widget *HitTest(float x, float y);
     void MoveFocus(int delta);
     void SetFocusTo(Widget *w);
+    // Ends a gesture the pointer is no longer allowed to finish, and hands the widget
+    // the release it will otherwise never see. See the WM_CAPTURECHANGED handler.
+    void CancelCapture();
     void PlaceImeAtCaret();
 
     static LRESULT CALLBACK Proc(HWND h, UINT m, WPARAM w, LPARAM l);
@@ -1170,6 +1173,25 @@ inline bool Window::RefreshHover() {
     return changed;
 }
 
+// The gesture that was in progress cannot finish: the capture went to another window,
+// the system took it back for a modal state of its own, or this window lost the
+// activation. Nothing else here notices. WM_LBUTTONUP is delivered to whoever holds the
+// capture, and from that moment on that is no longer this window, so the release is
+// synthesised rather than waited for.
+//
+// Without it a drag has no end at all: a scroll bar with a repeat timer running keeps
+// scrolling, a slider keeps its knob grabbed, and a button that was held down stays
+// looking held. The capture is dropped before OnRelease runs, because a widget is free
+// to lay the page out again there and this must not re-enter on the way.
+inline void Window::CancelCapture() {
+    Widget *w = capture;
+    if (!w) return;
+    capture = nullptr;
+    w->pressed = false;
+    if (w->enabled) w->OnRelease();
+    Invalidate();
+}
+
 inline D2D1_POINT_2F Widget::Cursor() const {
     POINT pt = {};
     GetCursorPos(&pt);
@@ -1510,8 +1532,12 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         self->active = LOWORD(wp) != WA_INACTIVE;
         // A window that has just been alt-tabbed away from must not leave a flyout
         // hanging open over its own page, waiting for a click it will never get.
-        if (!self->active)
+        if (!self->active) {
+            // The button that was down comes up over whatever window took the
+            // activation, so this is where the drag ends -- see CancelCapture.
+            self->CancelCapture();
             for (auto &w : self->widgets) w->Dismiss();
+        }
         self->Invalidate();
         break;
     case WM_PAINT: {
@@ -1625,6 +1651,18 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    // The capture left this window -- another window took it, or a modal state did.
+    // The pointer is no longer ours to follow and the button's release will be
+    // delivered elsewhere, so whatever was being dragged is finished with here.
+    case WM_CAPTURECHANGED:
+        self->CancelCapture();
+        return 0;
+    case WM_CANCELMODE:
+        // The same thing, announced before the capture is taken rather than after.
+        // Released here so that the two handlers cannot disagree about who holds it.
+        if (self->capture) ReleaseCapture();
+        self->CancelCapture();
+        return 0;
     case WM_GETMINMAXINFO: {
         int mw = 0, mh = 0;
         self->MinSize(&mw, &mh);
