@@ -341,13 +341,23 @@ struct Widget {
     // way -- read the cursor at paint time -- answers "where is the pointer", which is
     // the whole of a slider and only half of a selection.
     virtual void OnDrag(float /*x*/, float /*y*/) {}
-    // The pointer moved somewhere over the window -- not necessarily over this control --
-    // in window DIPs.
+    // The pointer moved over this control, or over the region it watches outside itself
+    // (see ExternalRegion), in the control's own space.
     //
-    // For a control that answers to the area it belongs to rather than to itself: a
-    // scroll bar shows itself when the pointer moves over the page it scrolls, which is a
-    // move it would otherwise never hear about.
+    // It is sent to the control under the pointer and to nobody else, so a control that
+    // has to hear about a move it does not contain says where that is: a scroll bar shows
+    // itself when the pointer crosses the page it scrolls, which is a page and not a
+    // control. Being told about every move in the window is not the same offer -- it is
+    // a coordinate space each control then has to correct by hand.
     virtual void OnPointerMove(float /*x*/, float /*y*/) {}
+    // The area outside `rect` -- in the control's own space, so for a scrolling control
+    // the page's offset is already off it -- where this control wants OnPointerMove as
+    // well. Empty for a control that only answers to itself.
+    //
+    // Moves only. A press here is a press on whatever is behind, so this widens what a
+    // control can see, not what it takes: a scroll bar that could be grabbed by clicking
+    // the page it scrolls would be a different control.
+    virtual D2D1_RECT_F ExternalRegion() const { return {}; }
     // A wheel turned over this control, in its own space; `notches` is positive away from
     // the user. Return true to keep it from the page.
     //
@@ -1589,24 +1599,39 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             const bool now = (w.get() == over);
             if (w->hover != now) { w->hover = now; changed = true; }
         }
+        // The page's offset, read once per move rather than once per control: every
+        // control that hears about a pointer below hears about it in the space its own
+        // rect is in.
+        float pdy = 0.0f, popacity = 1.0f;
+        self->ContentTransform(&pdy, &popacity);
+
         if (self->capture) {
             // In the widget's own space, so a control dragged while the page is still
             // gliding does not un-press itself.
             const D2D1_POINT_2F at = self->capture->Cursor();
             const bool down = Inside(self->capture->rect, at.x, at.y);
             if (self->capture->pressed != down) { self->capture->pressed = down; changed = true; }
-            float pdy = 0.0f, popacity = 1.0f;
-            self->ContentTransform(&pdy, &popacity);
             self->capture->OnDrag(mx, self->capture->scrolls ? my - pdy : my);
         }
-        // By index, because a drag above may have laid the page out and replaced the list.
-        for (size_t i = 0; i < self->widgets.size(); i++)
-            self->widgets[i]->OnPointerMove(mx, my);
+
+        // The control under the pointer, and any control that watches a region outside
+        // its own rectangle. See Widget::ExternalRegion. By index, because a drag above
+        // may have laid the page out and replaced the list.
+        bool tracks = false;
+        for (size_t i = 0; i < self->widgets.size(); i++) {
+            Widget *wd = self->widgets[i].get();
+            const float wy = wd->scrolls ? my - pdy : my;
+            if (wd != over &&
+                !(wd->visible && wd->enabled && Inside(wd->ExternalRegion(), mx, wy)))
+                continue;
+            wd->OnPointerMove(mx, wy);
+            if (wd->TracksPointer()) tracks = true;
+        }
         SetCursor(LoadCursorW(nullptr, !over            ? kCursorArrow
                                      : over->TextCursor() ? kCursorIBeam
                                      : over->HandCursor() ? kCursorHand
                                                           : kCursorArrow));
-        if (changed || (over && over->TracksPointer())) self->Invalidate();
+        if (changed || tracks) self->Invalidate();
         return 0;
     }
     case WM_MOUSELEAVE:

@@ -58,7 +58,8 @@ All virtual. Points are in DIPs.
 | `void OnPress(float x, float y)` | nothing | Button pressed on the control, at that point. |
 | `void OnDrag(float x, float y)` | nothing | Pointer moved while this control holds capture. |
 | `void OnRelease()` | nothing | Button released after `OnPress`, wherever the pointer is. Before `OnClick`. |
-| `void OnPointerMove(float x, float y)` | nothing | Pointer moved anywhere over the window, in window DIPs. |
+| `void OnPointerMove(float x, float y)` | nothing | Pointer moved over the control, or over the region it declares in `ExternalRegion`. |
+| `D2D1_RECT_F ExternalRegion() const` | empty | The area outside `rect`, in the control's own space, where this control also wants `OnPointerMove`. Moves only: it does not widen what a click can hit. |
 | `bool OnWheel(float x, float y, float notches)` | `false` | Wheel over the control. `notches` is positive away from the user. Return true to keep it from the page. |
 | `bool OnKey(WPARAM vk)` | `false` | Key down while focused. Return true to consume it. |
 | `bool OnChar(wchar_t ch)` | `false` | Typed character while focused. |
@@ -73,9 +74,9 @@ All virtual. Points are in DIPs.
 | `bool Animating() const` | fading | Return true while the control still has something to animate. |
 | `void Tick(float dt)` | fades the three states | Every animation frame. |
 
-Points passed to `OnPress`, `OnDrag` and `OnWheel` are in the control's own space: for a
-scrolling control the `ContentTransform` offset is already taken off, so they compare
-directly with `rect`.
+Points passed to `OnPress`, `OnDrag`, `OnPointerMove` and `OnWheel` are in the control's
+own space: for a scrolling control the `ContentTransform` offset is already taken off,
+so they compare directly with `rect`.
 
 ## Helpers
 

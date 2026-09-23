@@ -528,6 +528,9 @@ struct ScrollBar : Widget {
     float value    = 0.0f;   // where it has been scrolled to
     float drawn    = 0.0f;   // where it is drawn, which trails `value` through a glide
     // The scrolling part of the window. The pointer moving anywhere over it shows the bar.
+    // Handed to the window as this control's ExternalRegion, which is where a move over
+    // the page is delivered from: not a hit-test area, so a click here is a click on the
+    // page.
     D2D1_RECT_F area = {};
     // Asked to scroll the page to `to`. `glide` is false for the thumb only: a dragged
     // thumb has to stay under the pointer, not catch up with it.
@@ -581,10 +584,13 @@ struct ScrollBar : Widget {
 
     // --- input --------------------------------------------------------------------
     bool TracksPointer() const override { return hover; }   // the arrow under it lights
+    D2D1_RECT_F ExternalRegion() const override { return area; }
 
     void OnPointerMove(float x, float y) override {
+        // Both places a move can arrive from -- over the bar itself and over the page it
+        // scrolls -- are places the bar should be out for, so there is nothing to test.
         px = x; py = y;
-        if (visible && (Inside(area, x, y) || Inside(rect, x, y))) Wake();
+        Wake();
         Poll();
     }
     void OnPress(float x, float y) override {
@@ -1064,11 +1070,10 @@ struct DropDown : Widget {
     }
     void OnPointerMove(float x, float y) override {
         if (!BarShown()) return;
-        // Window DIPs, unlike the three above.
-        float dy = 0.0f, op = 1.0f;
-        if (scrolls && owner) owner->ContentTransform(&dy, &op);
         SyncBar();
-        const float fy = y - dy - Lift();
+        // The flyout's own space: the page's offset is already off it, see
+        // Widget::OnPointerMove.
+        const float fy = y - Lift();
         if (!barGrab) bar->hover = hover && Inside(bar->rect, x, fy);
         bar->OnPointerMove(x, fy);
     }

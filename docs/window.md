@@ -114,7 +114,7 @@ The next system theme change replaces it through `ReloadTheme()`.
 
 | Input | What the window does |
 |---|---|
-| Mouse move | Sets `hover` on the control under the pointer. The control holding capture gets `pressed` (while the pointer is over it) and `OnDrag`. Every control gets `OnPointerMove`. |
+| Mouse move | Sets `hover` on the control under the pointer, and sends `OnPointerMove` to it and to any control whose `ExternalRegion` the pointer is over. The control holding capture gets `pressed` (while the pointer is over it) and `OnDrag`. |
 | Left button down | Every other control gets `Dismiss()`. The control under the pointer takes capture, `pressed`, focus if it is focusable, and `OnPress`. A click on nothing clears focus. |
 | Left button up | The captured control gets `OnRelease`, then `OnClick` if the pointer is still over it. |
 | Capture lost | `WM_CAPTURECHANGED` or `WM_CANCELMODE`: the drag in progress gets `OnRelease` and the capture is cleared. A button's release goes to whoever holds the capture, so a drag that loses it is ended here rather than never ending. |
