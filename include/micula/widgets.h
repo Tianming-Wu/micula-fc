@@ -385,6 +385,7 @@ struct Slider : Widget {
     // back wrong the next time the page is built.
     std::function<void(float)> onChange;
     std::function<void(float)> onCommit;
+    // Between a press and its release, wherever the pointer has got to since.
     bool dragging = false;
 
     Slider(float v, float a, float b, float s, std::function<void(float)> f)
@@ -392,8 +393,11 @@ struct Slider : Widget {
 
     bool Focusable() const override { return true; }
     // While it is being dragged: the knob follows the cursor, and the cursor moving is
-    // the only thing that happens.
-    bool TracksPointer() const override { return pressed; }
+    // the only thing that happens. `dragging` rather than `pressed`, because the window
+    // clears `pressed` the moment the pointer leaves the rectangle -- which is what
+    // makes a button cancellable by dragging off it, and which a knob dragged past its
+    // own end must not do.
+    bool TracksPointer() const override { return dragging; }
     float Frac() const { return (value - lo) / (hi - lo); }
 
     void SetFromX(float x) {
@@ -401,11 +405,20 @@ struct Slider : Widget {
         // Snapped to the step, so a slider that writes 0.02 into a settings file
         // cannot land on 0.019999999. Files like that are read by people.
         const float raw = lo + t * (hi - lo);
-        value = std::round(raw / step) * step;
+        const float snapped = std::round(raw / step) * step;
+        // The drag reads the cursor at paint time, so this runs once a frame for as long
+        // as the mouse is down. A frame that lands on the step the knob is already on
+        // has nothing to report, and reporting it anyway would have onChange write the
+        // settings file sixty times across one gesture.
+        if (snapped == value) return;
+        value = snapped;
         if (onChange) onChange(value);
     }
-    void OnClick() override { /* handled by the drag path below */ }
-    void OnRelease() override { if (onCommit) onCommit(value); }
+    void OnClick() override { /* handled by the press below */ }
+    // The press takes the knob to where it landed rather than waiting for a frame: a
+    // click short enough to be over before the window repaints is still a click.
+    void OnPress(float x, float /*y*/) override { dragging = true; SetFromX(x); }
+    void OnRelease() override { dragging = false; if (onCommit) onCommit(value); }
     bool OnKey(WPARAM vk) override {
         if (vk == VK_LEFT || vk == VK_DOWN)  { value = (std::max)(lo, value - step); }
         else if (vk == VK_RIGHT || vk == VK_UP) { value = (std::min)(hi, value + step); }
@@ -420,10 +433,12 @@ struct Slider : Widget {
 
     void Paint(const Painter &p) override {
         const Palette &c = *p.pal;
-        // The widget is dragged by reading the cursor while the mouse is down. The
-        // window gives the widget its pressed flag and holds capture, so this is the
-        // whole of the drag: no separate mouse-move plumbing per widget.
-        if (pressed && owner) SetFromX(Cursor().x);
+        // The widget is dragged by reading the cursor while the mouse is down: the window
+        // holds capture and gave the widget its `dragging` flag at the press, so this is
+        // the whole of the drag, with no per-widget mouse-move plumbing. It is also what
+        // keeps the knob under the cursor once the drag has left the control's rectangle
+        // -- or the window -- entirely.
+        if (dragging && owner) SetFromX(Cursor().x);
         const float cy = rect.top + Height(rect) / 2;
         const float x0 = rect.left + 8, x1 = rect.right - 8;
         const float at = x0 + Frac() * (x1 - x0);
