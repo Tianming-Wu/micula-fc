@@ -226,6 +226,7 @@ repaint -- so everything a control is holding survives a scroll, and is lost onl
 | `std::wstring ClipboardText(HWND owner)` | The clipboard's Unicode text, or empty. |
 | `void SetClipboardText(HWND owner, const std::wstring &s)` | Replaces the clipboard's contents with `s`. |
 | `void StartAnimation(Window *w)` | Wakes the message loop so it checks for animation. Only needed when a control starts animating outside a message. |
+| `double MonotonicSeconds()` | Seconds since the process started, monotonic. For an animation that is periodic and holds nothing else, so that a control rebuilt by a layout does not restart it. |
 | `kCaptionH` | 32. Title bar height in DIPs. |
 | `kCaptionBtnW` | 46. Width of each title bar button in DIPs. |
 | `kResizeGrip` | 6. Width of the resize border in DIPs. |

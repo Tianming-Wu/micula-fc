@@ -182,9 +182,15 @@ ProgressBar();
 | Member | Description |
 |---|---|
 | `float value` | Progress from 0 to 1. |
-| `bool indeterminate` | Show a moving segment instead of `value`. Keeps the frame loop running while visible. |
+| `bool indeterminate` | Show two crossing bars instead of `value`. Keeps the frame loop running while visible. |
 
-The bar is 3 DIPs tall, centered in `rect`.
+The bar is 3 DIPs tall, centered in `rect`. Indeterminate is WinUI's own animation: two bars,
+40% and 60% of the width, crossing on a two-second loop with the second one starting three
+quarters of a second behind the first, so that for half of the cycle one is leaving at the
+right while the other arrives at the left. The loop is read from `MonotonicSeconds()` rather
+than counted per frame, so a control the page has rebuilt -- a resize, another setting
+changing the shape of the page, a scroll on a page that lays itself out in response to one --
+does not restart the sweep.
 
 ## ScrollBar
 
