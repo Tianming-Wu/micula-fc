@@ -362,8 +362,9 @@ struct Widget {
     // the user. Return true to keep it from the page.
     //
     // For an open drop-down's list, which scrolls by itself when it is taller than the
-    // room it has. Left to the page, the notch scrolled the page instead, and scrolling
-    // lays the page out again -- which throws the open list away with everything else.
+    // room it has. Left to the page, the notch scrolled the page instead: the list's own
+    // anchor moved out from under it, and on a page that lays itself out in response to a
+    // scroll the open list was thrown away with everything else.
     virtual bool OnWheel(float /*x*/, float /*y*/, float /*notches*/) { return false; }
     // A WM_TIMER the window does not own. Return true if the id was this control's.
     virtual bool OnTimer(UINT_PTR /*id*/) { return false; }
@@ -442,17 +443,32 @@ struct Widget {
     // knows the offset.
     D2D1_POINT_2F Cursor() const;
 
-    // This widget moves with the page's scroll, so it is painted inside the window's
-    // ClipRect() and takes no clicks outside it. Left false for the furniture -- a
-    // navigation list and a title-bar button do not scroll, and clipping them to the
-    // scrolling area would hide them.
+    // The part of the page that is on screen, in this widget's own coordinates -- the
+    // window's ClipRect with the page's paint offset added back on. Empty when the page
+    // does not scroll, and empty in the same way ClipRect is.
+    //
+    // For a control that has to know how much room it really has. A drop-down deciding
+    // whether its list fits below it is asking about the visible strip, and on a
+    // scrolling page that strip is not the window's: it moves with the page while the
+    // control's own rectangle stays where the layout put it.
+    D2D1_RECT_F VisibleArea() const;
+
+    // This widget moves with the page's scroll: its `rect` is in the page's own space --
+    // window coordinates with the scroll *not* taken off -- and the offset that puts it
+    // on screen comes from ContentTransform() when it is painted and hit-tested. So,
+    // painted only inside the window's ClipRect() and taking no clicks outside it.
+    //
+    // Left false for the furniture -- a navigation list, a title-bar button, the page's
+    // own scroll bar -- which does not scroll, and which clipping to the scrolling area
+    // would hide.
     bool scrolls = false;
     // Survives ClearWidgets, together with the capture or focus it holds.
     //
-    // For a control the page lays out *while it is being operated*. A scroll bar's thumb,
-    // dragged, scrolls the page, and scrolling re-lays the page out -- which rebuilds
-    // every control and drops the capture, so the drag would end on its first pixel. The
-    // page makes such a control once and repositions it on every layout.
+    // For a control the page lays out *while it is being operated*: the page is rebuilt,
+    // the gesture is not over, and a rebuild would drop the capture -- so it would end on
+    // its first pixel. A scroll bar's thumb held through a resize is what this is for, and
+    // so is anything else a page repositions on every layout that a person can hold on
+    // to. The page makes such a control once and repositions it in each Layout().
     bool persistent = false;
 };
 
@@ -624,11 +640,12 @@ struct Window {
     // Hover, recomputed from where the cursor actually is rather than from the last
     // mouse message.
     //
-    // Needed because the widget list is rebuilt more often than the mouse moves: a
-    // scroll, an expander opening and every saved setting all call Layout(), and the
-    // control under a *stationary* pointer is then a new object with hover false --
-    // which used to make the highlight vanish under the cursor and now would fade it
-    // out, which is worse. Called from the tick, where a rebuild has just happened.
+    // Needed because the widget list is rebuilt more often than the mouse moves: an
+    // expander opening, a page switching, a button relabelling itself and every saved
+    // setting all call Layout(), and the control under a *stationary* pointer is then a
+    // new object with hover false -- which used to make the highlight vanish under the
+    // cursor and now would fade it out, which is worse. Called from the tick, where a
+    // rebuild has just happened.
     bool RefreshHover();
 
     template <typename T> T *Add(T *w) {
@@ -893,11 +910,27 @@ inline void Window::Paint() {
     // rather than interleaved with it in insertion order. They do not overlap -- the
     // furniture is outside ClipRect by construction, which is the same fact that makes
     // the clip legal -- so the order between the two groups cannot show.
+    // A control that has been scrolled clear of the clip is not painted at all. The clip
+    // would discard its pixels anyway, but only after it had built everything it draws --
+    // and a long page pays for every row above and below the visible strip, on every
+    // frame of a scroll. Four DIPs of slack, because a control may draw a little outside
+    // its own rectangle: a focus ring, a shadow, a flyout the control has not grown its
+    // rect to cover.
+    auto reaches = [&](const Widget *w) {
+        const D2D1_RECT_F r = { w->rect.left, w->rect.top + dy,
+                                w->rect.right, w->rect.bottom + dy };
+        return r.right + 4.0f > clip.left && r.left - 4.0f < clip.right &&
+               r.bottom + 4.0f > clip.top && r.top - 4.0f < clip.bottom;
+    };
+    auto shown = [&](const Widget *w) {
+        return w->visible && (!clipping || !w->scrolls || reaches(w));
+    };
     auto pass = [&](int z) {
         for (auto &w : widgets)
             if (w->visible && w->z == z && !w->scrolls) w->Paint(p);
         bool any = false;
-        for (auto &w : widgets) if (w->visible && w->z == z && w->scrolls) { any = true; break; }
+        for (auto &w : widgets)
+            if (w->z == z && w->scrolls && shown(w.get())) { any = true; break; }
         if (!any) return;
         // Clip first, transform second. The clip is a fixed window onto the page and
         // must not move with what is being drawn inside it -- pushed the other way round
@@ -913,7 +946,7 @@ inline void Window::Paint() {
                                                 D2D1::IdentityMatrix(), op), nullptr);
         }
         for (auto &w : widgets)
-            if (w->visible && w->z == z && w->scrolls) w->Paint(p);
+            if (w->z == z && w->scrolls && shown(w.get())) w->Paint(p);
         if (layered) dc->PopLayer();
         if (dy != 0.0f) dc->SetTransform(D2D1::Matrix3x2F::Identity());
         if (clipping) dc->PopAxisAlignedClip();
@@ -1219,6 +1252,18 @@ inline D2D1_POINT_2F Widget::Cursor() const {
     if (scrolls) owner->ContentTransform(&dy, &op);
     const float s = owner->scale();
     return D2D1::Point2F(pt.x / s, pt.y / s - dy);
+}
+
+inline D2D1_RECT_F Widget::VisibleArea() const {
+    if (!owner) return D2D1_RECT_F{ 0, 0, 0, 0 };
+    const D2D1_RECT_F clip = owner->ClipRect();
+    if (clip.right <= clip.left || clip.bottom <= clip.top) return clip;
+    // The page is drawn `dy` from where it was laid out, so the window's strip becomes a
+    // strip of the page by shifting it the other way -- the same offset the pointer is
+    // shifted by, in the other direction.
+    float dy = 0.0f, op = 1.0f;
+    if (scrolls) owner->ContentTransform(&dy, &op);
+    return D2D1_RECT_F{ clip.left, clip.top - dy, clip.right, clip.bottom - dy };
 }
 
 inline void Window::SetFocusTo(Widget *w) {

@@ -185,7 +185,8 @@ A vertical scroll bar that follows WinUI: hidden, a thin indicator while the pag
 scrolled or the pointer is over it, and expanded with arrows when the pointer rests on
 it. When Windows' "Always show scrollbars" setting is on, it stays expanded.
 
-The page sets these on every `Layout()`:
+The page sets these in `Layout()`, and keeps `value` and `drawn` current whenever it
+scrolls -- which is the only two of them that move on their own:
 
 | Member | Description |
 |---|---|
@@ -204,5 +205,5 @@ The page sets these on every `Layout()`:
 | `void Poll()` | Updates the bar's state and timers. Call it after `Wake()`. |
 | `UINT_PTR stateTimer`, `repeatTimer` | Timer ids, 4 and 5 by default. A second bar in the same window needs two other ids. |
 
-Make the bar once, set `persistent` on it, and reposition it in each `Layout()`. See
-[Scrolling](window.md#scrolling).
+Make the bar once, set `persistent` on it, and reposition it in each `Layout()`; a scroll
+touches only `value` and `drawn`. See [Scrolling](window.md#scrolling).

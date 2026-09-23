@@ -86,8 +86,10 @@ creates them again from the window's own fields, so a callback should update tho
 fields rather than the control. `Layout()` may be called from inside a callback. Text and
 backgrounds that are not controls are drawn in `PaintPage()`. Coordinates are in DIPs.
 
-For a scrolling page, return the scrolling area from `ClipRect()` and set `scrolls` on
-the controls inside it. `examples/gallery` does this.
+For a scrolling page, return the scrolling area from `ClipRect()`, set `scrolls` on the
+controls inside it, and move them by returning an offset from `ContentTransform()` -- so a
+wheel notch costs a transform and a repaint rather than a `Layout()`, and the page is not
+rebuilt as it scrolls. `examples/gallery` does this.
 
 ## Documentation
 
@@ -99,4 +101,4 @@ the controls inside it. `examples/gallery` does this.
 
 ## License
 
-MIT. Micula is not affiliated with Microsoft.
+[MIT License](LICENSE). Micula is not affiliated with Microsoft.

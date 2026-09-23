@@ -47,7 +47,7 @@ All virtual. `ClassName()` and `Title()` must be overridden.
 |---|---|---|
 | `const wchar_t *ClassName() const` | | Once, in `Create`. The window class name; unique per window type. |
 | `const wchar_t *Title() const` | | Window title, also drawn in the title bar. |
-| `void Layout()` | nothing | In `Create`, on resize and on DPI change. Call it yourself when the page changes shape. Start with `ClearWidgets()`. |
+| `void Layout()` | nothing | In `Create`, on resize and on DPI change. Call it yourself when the page changes shape -- and not when it scrolls: that is `ContentTransform()`. Start with `ClearWidgets()`. |
 | `void PaintPage(const Painter &p)` | nothing | Every paint, before the controls. Draws what is not a control: headings, card backgrounds, labels. |
 | `void OnDefaultAction()` | nothing | Enter, when no control has focus. |
 | `void OnCancel()` | posts `WM_CLOSE` | Esc. |
@@ -55,7 +55,7 @@ All virtual. `ClassName()` and `Title()` must be overridden.
 | `bool AnimationWanted() const` | `false` | Before every frame. Return true to keep frames coming for an animation of the page's own. |
 | `bool OnAppMessage(UINT m, WPARAM wp, LPARAM lp)` | `false` | Messages the window does not consume. Return true if handled. See [Messages](#messages). |
 | `D2D1_RECT_F ClipRect() const` | empty | The scrolling part of the page. Controls with `scrolls` set are clipped to it and take input only inside it. Empty means the page does not scroll. |
-| `void ContentTransform(float *dy, float *opacity) const` | `0`, `1` | Vertical offset and opacity for the scrolling controls while painting. Hit testing subtracts the same offset. For a scroll that glides or a page that fades in. `PaintPage` is not transformed. |
+| `void ContentTransform(float *dy, float *opacity) const` | `0`, `1` | Vertical offset and opacity for the scrolling controls while painting. **A page's scroll lives here** (`dy = -drawn`); hit testing subtracts the same offset, and the points a control is given in its callbacks have had it taken off already. The opacity is for a page arriving or fading in. `PaintPage` is not transformed. |
 | `void MinSize(int *w, int *h) const` | `0`, `0` | Smallest client size in DIPs the window can be resized to. 0 means no limit. |
 
 ## Controls
@@ -124,6 +124,7 @@ The next system theme change replaces it through `ReloadTheme()`.
 | `WM_TIMER` | Timer 2 blinks the caret. Other ids go to each control's `OnTimer` in order, then to `OnAppMessage`. |
 | Deactivation | Every control gets `Dismiss()`, and a drag in progress gets its `OnRelease`. |
 | Resize, DPI change | `Layout()`. |
+| Scroll | Nothing is laid out: the controls move through `ContentTransform()` and the frame loop repaints them. |
 | Light/dark change | `ReloadTheme()`. |
 
 Messages not consumed reach `OnAppMessage` and then `DefWindowProc`: `WM_CLOSE`,
@@ -133,62 +134,89 @@ and wheel notches no control took. Mouse and keyboard messages in the table abov
 
 ## Scrolling
 
-Return the scrolling area from `ClipRect()`, lay controls out at `y - scroll` with
-`scrolls` set, and keep one `ScrollBar` across layouts:
+Scrolling is a transform, not a layout. Return the scrolling area from `ClipRect()`, set
+`scrolls` on the controls inside it, lay them out in the **page's** coordinates -- as though
+the page had never been scrolled -- and move them by returning an offset from
+`ContentTransform()`, glided on the frame loop:
 
 ```cpp
 struct List : micula::Window {
     static constexpr float kTop = 80, kRow = 44;
     bool checked[30] = {};
-    float scroll = 0, maxScroll = 0;
+    float scroll = 0, drawn = 0, maxScroll = 0;   // where it is, where it is drawn, its end
     micula::ScrollBar *bar = nullptr;
 
     const wchar_t *ClassName() const override { return L"MyApp.List"; }
     const wchar_t *Title() const override { return L"List"; }
     D2D1_RECT_F ClipRect() const override { return { 0, kTop, ClientW(), ClientH() }; }
+    void ContentTransform(float *dy, float *opacity) const override {
+        *dy = -drawn;                            // scrolled down: drawn higher up
+        *opacity = 1.0f;
+    }
+    // The glide is the page's own animation; this is how the loop knows to run frames.
+    bool AnimationWanted() const override { return drawn != scroll; }
+    void OnTick(float dt) override {
+        if (drawn == scroll) return;
+        drawn += (scroll - drawn) * (1.0f - std::exp(-dt / 0.07f));
+        if (std::fabs(scroll - drawn) < 0.5f) drawn = scroll;
+        if (bar) { bar->value = scroll; bar->drawn = drawn; }
+    }
+    // What the wheel, the bar and its arrows call: a target, not a rebuild.
+    void ScrollTo(float to, bool glide = true) {
+        scroll = std::clamp(to, 0.0f, maxScroll);
+        if (!glide) drawn = scroll;               // the thumb has to stay under the pointer
+        if (bar) { bar->value = scroll; bar->drawn = drawn; bar->Wake(); bar->Poll(); }
+        if (drawn != scroll) micula::StartAnimation(this);
+        Invalidate();
+    }
 
     void Layout() override {
         ClearWidgets();                              // keeps `bar`: it is persistent
         for (int i = 0; i < 30; i++) {
             auto *cb = Add(new micula::CheckBox(L"Item", checked[i],
                                                 [this, i](bool v) { checked[i] = v; }));
-            cb->rect = micula::Rect(24, kTop + i * kRow - scroll, 300, 32);
+            cb->rect = micula::Rect(24, kTop + i * kRow, 300, 32);   // page coordinates
             cb->scrolls = true;
         }
         const float viewport = ClientH() - kTop, extent = 30 * kRow;
         maxScroll = extent > viewport ? extent - viewport : 0;
         if (!bar) {
-            bar = Add(new micula::ScrollBar([this](float to, bool) {
-                scroll = to;
-                Layout();
-                Invalidate();
-            }));
+            bar = Add(new micula::ScrollBar([this](float to, bool glide) { ScrollTo(to, glide); }));
             bar->persistent = true;
         }
         bar->rect = { ClientW() - micula::ScrollBar::kSize - 1, kTop, ClientW() - 1, ClientH() };
         bar->area = ClipRect();
         bar->viewport = viewport;
         bar->extent = extent;
-        bar->value = bar->drawn = scroll;
+        bar->value = scroll;
+        bar->drawn = drawn;
         bar->visible = maxScroll > 0;
     }
 
     bool OnAppMessage(UINT m, WPARAM wp, LPARAM) override {
         if (m != WM_MOUSEWHEEL) return false;
-        scroll -= GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA * 66;
-        scroll = scroll < 0 ? 0 : scroll > maxScroll ? maxScroll : scroll;
-        Layout();
-        bar->Wake();
-        bar->Poll();
-        Invalidate();
+        ScrollTo(scroll - GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA * 66);
         return true;
     }
 };
 ```
 
-`examples/gallery` is a complete scrolling page. For a scroll that glides, keep the
-target in `scroll`, animate a drawn position in `OnTick`, and return the difference from
-`ContentTransform`.
+Nothing above lays the page out while it is being scrolled. The controls' rectangles are
+worked out when the shape of the page changes, and a wheel notch costs one transform and one
+repaint -- so everything a control is holding survives a scroll, and is lost only to a
+`Layout()`: an open drop-down, a selection mid-drag, an animation that has not finished.
+
+`examples/gallery` is a complete scrolling page. Three things in the sample are on purpose:
+
+- Coordinates. The controls, and whatever `PaintPage()` draws, are in page coordinates.
+  `PaintPage()` is not transformed, so it takes the offset off its own drawing by hand
+  (`y - drawn`).
+- `Widget::VisibleArea()` is `ClipRect()` in that same space, for a control that has to know
+  how much room it really has -- a drop-down deciding whether its list fits below it.
+- The follower in `OnTick`, rather than `motion::Track` or `motion::Ramp`: a `Track` runs for
+  a duration, and a wheel spun through five notches restarts it five times inside one frame;
+  `Ramp` advances by a rate in value units and is for 0..1 fades, so it cannot carry a
+  distance in DIPs.
 
 ## Free functions and constants
 

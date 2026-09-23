@@ -43,7 +43,7 @@ struct Swatch : micula::Widget {
 | `float hoverT`, `pressT`, `focusT` | The same three states, faded from 0 to 1 over 83 ms by `Widget::Tick`. Use them for the background, as WinUI does. |
 | `int z` | 0 normally. 1 paints above and hit-tests before all other controls. |
 | `Window *owner` | Set by `Window::Add`. |
-| `bool scrolls` | Part of the scrolling area: clipped to `ClipRect()` and moved by `ContentTransform()`. |
+| `bool scrolls` | Part of the scrolling area: `rect` is in the page's own coordinates, and the control is clipped to `ClipRect()` and moved by `ContentTransform()`. |
 | `bool persistent` | Survives `ClearWidgets()`, together with focus or capture it holds. |
 
 ## Hooks
@@ -83,6 +83,7 @@ so they compare directly with `rect`.
 | Member | Description |
 |---|---|
 | `D2D1_POINT_2F Cursor() const` | The pointer now, in the control's own space. |
+| `D2D1_RECT_F VisibleArea() const` | The part of the page that is on screen, in the control's own space: `ClipRect()` through the same offset. Empty when the page does not scroll. |
 | `float Want(bool on) const` | 1 if `on` and enabled, else 0. The target for a state fade. |
 
 ## Animating a control

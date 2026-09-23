@@ -33,6 +33,10 @@ monitor with another DPI, and whenever the page calls it.
 - `Layout()` may be called from inside a control's callback. Controls removed while a
   message is being handled are destroyed after it returns.
 
+Scrolling is not a rebuild. A scrolling page moves its controls with `ContentTransform()`
+and never calls `Layout()` for a wheel notch, so nothing a control is holding -- focus, a
+selection, an animation -- is lost on the way. See [Window](window.md).
+
 ### Coordinates
 
 All positions and sizes are DIPs (1/96 inch). The render target carries the DPI, so
