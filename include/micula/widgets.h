@@ -305,20 +305,33 @@ struct Segmented : Widget {
     std::vector<std::wstring> options;
     int selected = 0;
     std::function<void(int)> onChange;
-    int hoverIndex = -1;
 
     Segmented(std::vector<std::wstring> opts, int sel, std::function<void(int)> f)
         : options(std::move(opts)), selected(sel), onChange(std::move(f)) {}
 
     bool Focusable() const override { return true; }
-    // The hovered cell is worked out at paint time from where the pointer is, so the
-    // window has to repaint while it moves across this control. See Widget::TracksPointer.
-    bool TracksPointer() const override { return true; }
+    // The hovered cell follows the pointer across the control, so the window has to
+    // repaint while it moves. See Widget::TracksPointer.
+    bool TracksPointer() const override { return hover; }
     float CellW() const { return Width(rect) / (float)(std::max)(size_t(1), options.size()); }
 
+    // The cell under `x`, or -1 past either end. Asked of the cursor where it is needed
+    // rather than cached in a field of its own: a cached one has to be written by Paint,
+    // and is then read by OnClick -- which is a click that depends on a frame having been
+    // drawn since the pointer moved, and a highlight that only stays right as long as the
+    // control also asks to be repainted on every move.
+    int IndexAtX(float x) const {
+        const int n = (int)options.size();
+        if (n <= 0) return -1;
+        const int i = (int)((x - rect.left) / CellW());
+        return (i < 0 || i >= n) ? -1 : i;
+    }
+
     void OnClick() override {
-        if (!enabled || hoverIndex < 0) return;
-        selected = hoverIndex;
+        if (!enabled) return;
+        const int i = IndexAtX(Cursor().x);
+        if (i < 0) return;
+        selected = i;
         if (onChange) onChange(selected);
     }
     bool OnKey(WPARAM vk) override {
@@ -331,14 +344,11 @@ struct Segmented : Widget {
 
     void Paint(const Painter &p) override {
         const Palette &c = *p.pal;
-        // Recomputed here rather than in the mouse handler: the widget does not see
-        // WM_MOUSEMOVE, only the hover flag, so the cell under the pointer has to
-        // come from the cursor position at paint time.
-        hoverIndex = -1;
-        if (hover && owner) {
-            hoverIndex = std::clamp((int)((Cursor().x - rect.left) / CellW()), 0,
-                                    (int)options.size() - 1);
-        }
+        // Read here rather than in a mouse handler: this control never sees a move, only
+        // its own hover flag, so the cell to light comes from the cursor at paint time --
+        // which is also why TracksPointer is true. Nothing is stored: which cell the
+        // pointer is over is a question about the pointer, not state this control keeps.
+        const int hot = hover ? IndexAtX(Cursor().x) : -1;
         p.FillRound(rect, metric::kRadiusControl, c.controlBg);
         p.StrokeRound(rect, metric::kRadiusControl, c.controlStroke);
         // **The pill appears at the new cell rather than sliding to it.** It used to
@@ -353,7 +363,7 @@ struct Segmented : Widget {
             if (sel)
                 p.FillRound({ cell.left + 2, cell.top + 2, cell.right - 2, cell.bottom - 2 },
                             metric::kRadiusControl - 1, enabled ? c.accent : c.controlBgHover);
-            else if ((int)i == hoverIndex && enabled)
+            else if ((int)i == hot && enabled)
                 p.FillRound({ cell.left + 2, cell.top + 2, cell.right - 2, cell.bottom - 2 },
                             metric::kRadiusControl - 1, c.controlBgHover);
             const D2D1_COLOR_F fg = !enabled ? c.textDisabled
