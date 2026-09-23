@@ -148,6 +148,9 @@ row -- 32 DIPs -- per step, so the row that arrives is on the control's own row 
 that was there has left it. That is what a notch of the wheel over an open list does, and
 Up and Down, and dragging the list's scroll bar.
 
+The accent mark is drawn on the control's own row and stays there: the list slides past it,
+so which option is under the mark is the choice, and the mark itself never travels.
+
 The panel is as tall as the list and is not cut to the room it has: where the room runs out
 the page clips it, and the far end of the list is what goes out of sight -- never the chosen
 row, which stays on the control. Its scroll bar appears when the list is taller than that

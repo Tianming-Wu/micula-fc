@@ -1105,23 +1105,27 @@ struct DropDown : Widget {
     void Dismiss() override { if (open) SetOpen(false); }
     bool Animating() const override {
         return Widget::Animating() || openT.Wants(open ? 1.0f : 0.0f) ||
-               slid != (float)selected || (BarShown() && bar->Animating());
+               (open && slid != (float)selected) || (BarShown() && bar->Animating());
     }
     void Tick(float dt) override {
         Widget::Tick(dt);
         openT.To(open ? 1.0f : 0.0f);
         if (open) {
             openT.Step(dt, motion::kFast, motion::Decel);
-        } else if (!openT.Step(dt, motion::kFaster, motion::Accel)) {
+            // The list slides while the popup is open, and only then. A click on an option
+            // closes the popup on the release, and a panel that then slid its way to the
+            // option it had just chosen would be moving the list *while the lid closed over
+            // it* -- two motions where there is room for one, and the slide is the one that
+            // loses, because it cannot finish. Closed, the panel is left where it was;
+            // SetOpen puts it on the chosen row before it is seen again.
+            const float want = (float)selected;
+            if (slid != want) {
+                slid += (want - slid) * (1.0f - std::exp(-dt / kSlideLag));
+                if (std::fabs(want - slid) < 0.004f) slid = want;
+                SyncBar();
+            }
+        } else if (!openT.Step(dt, motion::kFast, motion::Accel)) {
             z = 0;          // the lid has finished closing; stop keeping it raised
-        }
-        // What has a gap to close is the panel's own place: `slid` is where the list is
-        // drawn and `selected` is where it belongs.
-        const float want = (float)selected;
-        if (slid != want) {
-            slid += (want - slid) * (1.0f - std::exp(-dt / kSlideLag));
-            if (std::fabs(want - slid) < 0.004f) slid = want;
-            SyncBar();
         }
         if (BarShown()) {
             SyncBar();
@@ -1271,20 +1275,24 @@ struct DropDown : Widget {
             const D2D1_RECT_F row = { s.left + 4, top, s.right - 4, top + rowH };
             if (row.bottom <= s.top || row.top >= s.bottom) continue;
             const bool over = (int)i == hot;
-            if (over) p.FillRound(row, metric::kRadiusControl, Fade(c.subtleHover, openF));
-            if ((int)i == selected) {
-                // Fluent marks the chosen row with a short accent bar on the left rather
-                // than by filling it, which keeps the hover highlight legible on top of it.
-                // The bar sits in the panel's own margin and the label beside it starts at
-                // the same x as the control's own label, so the moment the panel settles the
-                // chosen row *is* the control's row, down to the pixels.
-                p.rt->FillRoundedRectangle(
-                    D2D1::RoundedRect({ row.left - 3, row.top + 8, row.left, row.bottom - 8 },
-                                      1.5f, 1.5f), p.Brush(Fade(c.accent, openF)));
-            }
+            // The row under the pointer is filled, and filled harder while the button is
+            // down: the press has to land somewhere, and the release takes the list away.
+            if (over)
+                p.FillRound(row, metric::kRadiusControl,
+                            Fade(pressed && enabled ? c.controlBgPressed : c.subtleHover, openF));
             p.Text(options[i], { row.left + 7, row.top, row.right, row.bottom },
                    p.font->body, Fade(c.textPrimary, openF));
         }
+        // The mark on the chosen row is drawn on the control's own row instead, and does not
+        // travel with the list. The two movements cancel: the choice moves one row while the
+        // panel moves one row the other way, so the mark it is put on is the mark of the
+        // choice, and what a notch of the wheel changes is which option is under it. Nothing
+        // stretches, because nothing has anywhere to go -- see motion::Span for the rule this
+        // is the degenerate case of.
+        p.rt->FillRoundedRectangle(
+            D2D1::RoundedRect({ s.left + 1, RowLine() + 8, s.left + 4, RowLine() + rowH - 8 },
+                              1.5f, 1.5f),
+            p.Brush(Fade(c.accent, openF)));
         // The bar once the list has arrived: its line is a setter, and at full strength
         // over a list still growing it would arrive first.
         if (BarShown() && openF >= 1.0f) {
