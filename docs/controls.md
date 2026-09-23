@@ -84,7 +84,18 @@ Segmented(std::vector<std::wstring> options, int selected, std::function<void(in
 |---|---|
 | `std::vector<std::wstring> options` | A few short labels. `rect` is divided equally between them. |
 | `int selected` | Index of the selected option. |
-| `std::function<void(int)> onChange` | Called with the new index on click, or on Left and Right (which wrap around). |
+| `std::function<void(int)> onChange` | Called whenever the selection changes: on a press, on each option the pointer crosses while the button is held, and on Left and Right (which wrap around). |
+
+The selection follows the button rather than waiting for the release: a press takes the option
+under the pointer, a drag carries the selection along -- out of the control and out of the
+window -- and the release only ends the gesture. The indicator slides to the new option and is
+longer than one cell while it is on its way; a label the indicator is crossing is cut by its
+edge and drawn in the colour of whatever is behind it. Left and Right wrap, which is the one
+move that crosses the whole control.
+
+`onChange` runs inside the mouse message rather than during a paint, but do not call `Layout()`
+from it during a drag: the layout rebuilds the control holding the capture, and the gesture ends
+on the option it had reached.
 
 ## Slider
 

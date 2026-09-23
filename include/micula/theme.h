@@ -255,8 +255,22 @@ inline float Decel(float u) {
 // the above: x(s) = 3s - 3s^2 + s^3 has no useful inverse, and this identity is exact.
 inline float Accel(float u) { return 1.0f - Decel(1.0f - u); }
 
-// A brush crossing over: linear, at a fixed rate, reversible at any point.
-//
+        // cubic-bezier(0.4, 0, 0.6, 1.0) -- "ease in and out", for something crossing from
+        // one end of its track to the other. It is the shape `KeySpline="0.4, 0.0, 0.6, 1.0"`
+        // draws in XAML, which is what WinUI's indeterminate progress bar travels on.
+        //
+        // Solved rather than closed-form, unlike the two above: with both control points
+        // live, x(s) = 0.4s^3 - 0.6s^2 + 1.2s is a cubic with no inverse worth writing down.
+        // Newton from a linear first guess, which is all this curve needs -- its slope is
+        // between 0.9 and 1.2 everywhere. The y(s) that falls out is smoothstep(s).
+        inline float InOut(float u) {
+            if (u <= 0.0f) return 0.0f;
+            if (u >= 1.0f) return 1.0f;
+            float s = u;
+            for (int i = 0; i < 3; i++)
+                s -= (((0.4f * s - 0.6f) * s + 1.2f) * s - u) / ((1.2f * s - 1.2f) * s + 1.2f);
+            return s * s * (3.0f - 2.0f * s);
+        }
 // Returns true while it is still moving. Reversing mid-fade walks back at the same
 // rate from wherever it got to, which is what BrushTransition does and is the reason
 // this is a rate rather than a storyboard -- a pointer that crosses a control and

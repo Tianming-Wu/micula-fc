@@ -601,7 +601,11 @@ struct Window {
     // --- lifetime ---------------------------------------------------------------
     bool Create(int dipW, int dipH, bool canResize, HICON icon);
     int  Run();
-    void Invalidate() { if (hwnd) InvalidateRect(hwnd, nullptr, FALSE); }
+    // While the frame loop is animating it draws every frame itself and clears the update
+    // region after each one, so invalidating as well buys nothing -- and it costs a frame:
+    // the region it sets is handed back by the next PeekMessage as a WM_PAINT, which paints
+    // the window a second time in the same frame. See Window::Run and the WM_PAINT case.
+    void Invalidate() { if (hwnd && !animOn) InvalidateRect(hwnd, nullptr, FALSE); }
 
     // Everything the window animates on its own account: every control's pointer states
     // and the three caption buttons. Distinct from AnimationWanted(), which is the
@@ -1428,6 +1432,26 @@ inline LONGLONG RefreshPeriod(HWND hwnd) {
 }
 }  // namespace frameclock
 
+// Seconds since the process started, monotonic, off the same performance counter the frame
+// loop times its frames with. QPC's frequency is fixed for the life of the process, so it
+// is read once.
+//
+// For a control whose animation is periodic and holds nothing else. Asking the clock where
+// in its cycle *now* is gives the same answer to a control that has just been built as to
+// the one it replaced, and a control is rebuilt for all sorts of reasons -- a resize, a save
+// that changes the shape of the page, a page that lays itself out in response to a scroll.
+// A phase counted per frame starts over from the beginning every time. See ProgressBar.
+inline double MonotonicSeconds() {
+    static const LARGE_INTEGER freq = [] {
+        LARGE_INTEGER f = {};
+        QueryPerformanceFrequency(&f);
+        return f;
+    }();
+    LARGE_INTEGER now = {};
+    QueryPerformanceCounter(&now);
+    return freq.QuadPart ? (double)now.QuadPart / (double)freq.QuadPart : 0.0;
+}
+
 inline int Window::Run() {
     SetTimer(hwnd, kCaretTimer, 530, nullptr);   // GetCaretBlinkTime's own default
     QueryPerformanceFrequency(&qpcFreq);
@@ -1604,9 +1628,14 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         self->Invalidate();
         break;
     case WM_PAINT: {
+        // The frame loop paints outside WM_PAINT while it is animating (see Window::Run),
+        // directly after the Tick that moved everything. A paint here would be the second
+        // one in the same frame, drawing the state from before that Tick -- and every mouse
+        // message this window handles invalidates, so during a drag it is every frame, at
+        // twice the drawing cost and half the frame rate.
         PAINTSTRUCT ps;
         BeginPaint(h, &ps);
-        self->Paint();
+        if (!self->animOn) self->Paint();
         EndPaint(h, &ps);
         return 0;
     }

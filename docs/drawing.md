@@ -145,6 +145,7 @@ Other icons can be written as escapes, for example `L"\uE74D"` for Delete.
 | `kNormal` | 0.250 s. Panels, flyouts, pages. |
 | `float Decel(float u)` | Ease-out for things arriving: cubic-bezier(0, 0, 0, 1). `u` from 0 to 1. |
 | `float Accel(float u)` | Ease-in for things leaving: cubic-bezier(1, 0, 1, 1). |
+| `float InOut(float u)` | Ease in and out, for something crossing a track: cubic-bezier(0.4, 0, 0.6, 1), the curve `KeySpline="0.4, 0.0, 0.6, 1.0"` draws. Solved numerically, unlike the two above. |
 | `bool Ramp(float *now, float want, float dt, float seconds)` | Moves `*now` linearly towards `want`, covering 0 to 1 in `seconds`. Returns true while still moving. For color fades. |
 
 `struct Track` animates one value along a curve:
