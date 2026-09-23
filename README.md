@@ -62,7 +62,7 @@ The headers link the libraries they need through `#pragma comment`, so with MSVC
 enough:
 
 ```bat
-cl /std:c++17 /EHsc /O1 /MT /I include app.cpp /link /SUBSYSTEM:WINDOWS
+cl /std:c++17 /EHsc /O1 /MT /DUNICODE /D_UNICODE /I include app.cpp /link /SUBSYSTEM:WINDOWS
 ```
 
 With CMake, add this directory and link `micula::micula`. Building the repository itself
@@ -70,6 +70,10 @@ builds both examples.
 
 A program using Micula has to:
 
+- compile with `UNICODE` and `_UNICODE` defined. The headers call the wide API, and a
+  program that does not define them still gets the A variants of everything in
+  `<windows.h>` -- including the names it hands this window, which are wide strings
+  here. The CMake target defines both for you.
 - initialize COM on the UI thread (apartment-threaded) before `Window::Create`. The title
   bar icon and `Window::Image` use WIC.
 - be per-monitor DPI aware, through its manifest or `micula::EnablePerMonitorDpi()`.

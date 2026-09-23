@@ -95,15 +95,20 @@ Slider(float value, float lo, float hi, float step, std::function<void(float)> o
 | Member | Description |
 |---|---|
 | `float value`, `lo`, `hi`, `step` | Value and range. A dragged value is rounded to a multiple of `step`. |
-| `std::function<void(float)> onChange` | Called on every change: each pointer move during a drag, and each key. |
+| `std::function<void(float)> onChange` | Called every time the value changes: during a drag, each time the pointer reaches another step, and on each key. |
 | `std::function<void(float)> onCommit` | Called once when a drag ends, and after each key. Save settings here, not in `onChange`. Not a constructor argument. |
 
 Keys: Left and Down subtract `step`, Right and Up add it, Home and End go to `lo` and
 `hi`.
 
-During a drag, `onChange` is called while the window is painting. Update the page's
-fields there, but don't call `Layout()` or add or remove controls. Do that in
-`onCommit`.
+During a drag, `onChange` is called while the window is painting, and only when the
+value moves to another step -- not once per frame. Update the page's fields there, but
+don't call `Layout()` or add or remove controls. Do that in `onCommit`.
+
+The drag belongs to the slider and not to its rectangle: dragged past either end of the
+track, or off the window altogether, the knob still follows the pointer, and `onCommit`
+fires when the gesture ends -- including when the window loses the capture or the
+activation, which ends it there rather than leaving it hanging.
 
 ## DropDown
 
