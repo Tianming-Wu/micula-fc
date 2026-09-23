@@ -160,6 +160,19 @@ Other icons can be written as escapes, for example `L"\uE74D"` for Delete.
 | `bool Moving() const` | True until the current movement ends. |
 | `bool Wants(float target) const` | True while moving, or while `target` differs from the current target. Use this in `Widget::Animating()`. |
 
+`struct Span` moves a marker between slots and stretches the interval it is drawn across:
+
+| Member | Description |
+|---|---|
+| `Span(float at = 0)` | Starts at rest on slot `at`. |
+| `float lead`, `float trail` | The two edges, in slots. Equal at rest. |
+| `float slide`, `float close` | Time constants, in seconds: 0.05 for the leading edge and 0.028 for the trailing one. Equal values weld the edges together. |
+| `void To(float at)` | The slot it belongs on. Aimed, not started: call it every frame. |
+| `void Set(float at)` | Jumps to `at` without animating. For a first layout. |
+| `bool Step(float dt)` | Advances by `dt`. Returns true while moving. |
+| `bool Wants(float at) const` | Anything left to do to reach `at`. Use this in `Animating()` and `AnimationWanted()`. |
+| `float Lo() const`, `float Hi() const` | The two edges, the lower one first: draw between them, in DIPs of one slot's pitch. |
+
 ## System
 
 In `micula/theme.h`.
