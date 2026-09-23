@@ -1195,7 +1195,6 @@ struct TextBox : Widget {
     size_t caret  = 0;      // index into `text`
     size_t anchor = 0;      // the other end of the selection; equal to caret when none
     float  scroll = 0.0f;   // how far the text is scrolled left, in DIPs
-    float  caretX = 0.0f;   // cached from the last paint, for the IME and the caret
     std::wstring placeholder;
     // The field holds a file-system path. Paste then also drops the quotes that
     // Explorer's "Copy as path" puts round what it copies, and any trailing spaces --
@@ -1207,7 +1206,11 @@ struct TextBox : Widget {
     // on every keystroke. See Widget::OnBlur for why a text field needs both.
     std::function<void(const std::wstring &)> onCommit;
 
-    IDWriteTextLayout *layout = nullptr;
+    // The layout is a cache of what the text, the format and the theme already say, so
+    // it is mutable: the queries below are const and are called from places that have no
+    // business rebuilding text layout, the IME among them. Built on demand, dropped by
+    // Dirty().
+    mutable IDWriteTextLayout *layout = nullptr;
 
     ~TextBox() override { if (layout) layout->Release(); }
 
@@ -1227,7 +1230,7 @@ struct TextBox : Widget {
     void Dirty() {
         if (layout) { layout->Release(); layout = nullptr; }
     }
-    void Ensure() {
+    void Ensure() const {
         if (layout || !owner || !owner->dw || !owner->fonts.body) return;
         owner->dw->CreateTextLayout(text.c_str(), (UINT32)text.size(), owner->fonts.body,
                                     100000.0f, 100.0f, &layout);
@@ -1240,7 +1243,7 @@ struct TextBox : Widget {
         // looks like the text was never set.
         if (layout) layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     }
-    float XOf(size_t index) {
+    float XOf(size_t index) const {
         Ensure();
         if (!layout) return 0.0f;
         FLOAT x = 0, y = 0;
@@ -1251,7 +1254,8 @@ struct TextBox : Widget {
     // The gap nearest `localX`, which is where a caret goes. `under`, if asked for, is
     // the character the point is actually over -- not the same thing in the right half
     // of a letter, and the one a double-click has to start from.
-    size_t IndexAt(float localX, size_t *under = nullptr) {
+    size_t IndexAt(float localX, size_t *under = nullptr) const {
+        Ensure();
         Ensure();
         if (under) *under = 0;
         if (!layout) return 0;
@@ -1460,11 +1464,15 @@ struct TextBox : Widget {
         return true;
     }
 
-    // Where the IME should open. Reported from the cached caret position rather than
-    // measured here, because this is called from the message loop and the layout may
-    // not exist yet on the first composition.
+    // Where the IME should open: at the caret, in the field's own space.
+    //
+    // Measured now rather than read from a position cached by the last paint. This is
+    // called from the message loop when a composition starts, which can arrive before
+    // the WM_PAINT for a key that has just moved the caret, and the candidate window
+    // then opened wherever the caret used to be. Nothing here depends on a paint having
+    // happened: the layout is created on demand -- see Ensure.
     bool CaretPoint(D2D1_POINT_2F *out) const override {
-        if (out) *out = D2D1::Point2F(InnerLeft() + caretX - scroll, rect.bottom);
+        if (out) *out = D2D1::Point2F(InnerLeft() + XOf(caret) - scroll, rect.bottom);
         return true;
     }
 
@@ -1493,7 +1501,6 @@ struct TextBox : Widget {
                active && enabled ? 2.0f : 1.0f);
 
         Ensure();
-        caretX = XOf(caret);
 
         const D2D1_RECT_F inner = { InnerLeft(), rect.top + 1, rect.right - 11, rect.bottom - 1 };
         p.rt->PushAxisAlignedClip(inner, D2D1_ANTIALIAS_MODE_ALIASED);
@@ -1519,7 +1526,7 @@ struct TextBox : Widget {
         }
 
         if (active && owner && owner->caretOn && enabled) {
-            const float x = inner.left + caretX - scroll;
+            const float x = inner.left + XOf(caret) - scroll;
             p.Line(x, rect.top + 6, x, rect.bottom - 6, c.textPrimary, 1.0f);
         }
         p.rt->PopAxisAlignedClip();
