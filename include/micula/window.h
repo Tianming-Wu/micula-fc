@@ -371,6 +371,14 @@ struct Widget {
     // highlight stays wherever it was when the pointer arrived and only catches up when
     // something else happens to repaint.
     virtual bool TracksPointer() const { return false; }
+    // Whether the press shadow should be showing.
+    //
+    // The window clears `pressed` the moment the pointer leaves the rectangle, which is
+    // what makes a button cancellable by dragging off it. A control whose gesture
+    // outlives the rectangle overrides this to say it is still held -- a slider dragged
+    // out of its own track would otherwise grow its thumb back under a finger that is
+    // plainly still on it, and the press is the only cue that the drag has not ended.
+    virtual bool PressedVisual() const { return pressed; }
     // The mouse went up on a widget that had capture, wherever the cursor ended up.
     //
     // OnClick is not the same event and cannot stand in for this one: it fires only
@@ -404,11 +412,11 @@ struct Widget {
     // value of its own -- the switch's knob, the segmented control's pill, a flyout
     // opening -- overrides both of these and calls them.
     virtual bool Animating() const {
-        return hoverT != Want(hover) || pressT != Want(pressed) || focusT != Want(focus);
+        return hoverT != Want(hover) || pressT != Want(PressedVisual()) || focusT != Want(focus);
     }
     virtual void Tick(float dt) {
         motion::Ramp(&hoverT, Want(hover), dt, motion::kFaster);
-        motion::Ramp(&pressT, Want(pressed), dt, motion::kFaster);
+        motion::Ramp(&pressT, Want(PressedVisual()), dt, motion::kFaster);
         // Focus moves a fill too (a text field lightens when the caret is in it) and
         // nothing else: the accent underline and the focus ring are setters, and arrive
         // whole.

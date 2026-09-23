@@ -398,6 +398,9 @@ struct Slider : Widget {
     // makes a button cancellable by dragging off it, and which a knob dragged past its
     // own end must not do.
     bool TracksPointer() const override { return dragging; }
+    // Held for the whole drag, not only while the pointer is inside the rectangle: the
+    // thumb is the one thing on screen saying the gesture has not ended yet.
+    bool PressedVisual() const override { return pressed || dragging; }
     float Frac() const { return (value - lo) / (hi - lo); }
 
     void SetFromX(float x) {
