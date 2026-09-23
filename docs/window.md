@@ -121,9 +121,10 @@ The next system theme change replaces it through `ReloadTheme()`.
 | Wheel | The control under the pointer gets `OnWheel`. If it returns false, the page gets `OnAppMessage(WM_MOUSEWHEEL, wp, lp)` with `lp` holding the pointer in client pixels. |
 | Key down | The focused control's `OnKey` first. If it returns false: Tab and Shift+Tab move focus, Space clicks the focused control, Enter clicks it or calls `OnDefaultAction()`, Esc calls `OnCancel()`. |
 | Characters | `WM_CHAR` and `WM_IME_CHAR` go to the focused control's `OnChar`. Control characters are dropped. |
-| `WM_TIMER` | Timer 2 blinks the caret. Other ids go to each control's `OnTimer` in order, then to `OnAppMessage`. |
+| `WM_TIMER` | Timer 2 blinks the caret and 3 is the frame loop's stand-in during a size or move drag. Other ids go to each control's `OnTimer` in order, then to `OnAppMessage`. |
 | Deactivation | Every control gets `Dismiss()`, and a drag in progress gets its `OnRelease`. |
 | Resize, DPI change | `Layout()`. |
+| Drag of the border or the caption | `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE`. Windows runs a modal loop of its own, in which the frame loop cannot run, so the window paints from a 16 ms timer for the duration: the resize is live and animations keep running. |
 | Scroll | Nothing is laid out: the controls move through `ContentTransform()` and the frame loop repaints them. |
 | Light/dark change | `ReloadTheme()`. |
 
@@ -231,6 +232,7 @@ repaint -- so everything a control is holding survives a scroll, and is lost onl
 | `kCaptionBtnW` | 46. Width of each title bar button in DIPs. |
 | `kResizeGrip` | 6. Width of the resize border in DIPs. |
 | `kCaretTimer` | 2. The caret's timer id. |
+| `kFrameTimer` | 3. The frame loop's timer id, used only while a size or move drag has the thread. |
 
 ## Internals
 

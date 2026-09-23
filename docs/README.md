@@ -65,9 +65,13 @@ both are false. Each frame calls `Tick(dt)` on every control and `OnTick(dt)` on
 page, then paints. Frames follow the compositor clock on Windows 11 and a
 high-resolution timer at the display's refresh rate on Windows 10.
 
+A drag of the window's border or its caption runs in a modal loop of Windows' own, in
+which that frame loop gets no turn. The window stands in for it with a 16 ms timer until
+the drag is over, so a resize is live and whatever was animating keeps running.
+
 ### Requirements
 
 - COM initialized on the UI thread, apartment-threaded, before `Window::Create`.
 - Per-monitor DPI awareness, from the manifest or `EnablePerMonitorDpi()`.
-- Timer IDs 2 and 4 to 7 belong to Micula.
+- Timer IDs 2 to 7 belong to Micula.
 - Call everything from the thread that created the window.

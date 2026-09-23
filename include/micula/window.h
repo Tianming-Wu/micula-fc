@@ -554,6 +554,10 @@ struct Window {
     // page that needs to know whether a value it was handed should animate or land
     // (motion::Track::To or Track::Set) when it lays itself out.
     bool animOn = false;
+    // True while Windows is running a modal loop of its own for a drag of the border or the
+    // caption, during which the frame loop cannot run and WM_PAINT is the only painting
+    // there is. See WM_ENTERSIZEMOVE.
+    bool inSizeMove = false;
     bool alive = true;
 
     float scale() const { return dpi / 96.0f; }
@@ -739,6 +743,15 @@ struct Window {
 // what replaced it and why. Named so a subclass that adds one of its own does not
 // silently take it over.
 constexpr UINT_PTR kCaretTimer = 2;
+
+// The stand-in for the frame loop while Windows is running a modal loop of its own: a drag
+// of the border or of the caption, which happens inside DefWindowProc and stops the
+// window's own loop from getting another turn until it is over. See WM_ENTERSIZEMOVE.
+//
+// 3, between the caret's 2 and the scroll bars' 4 to 7: a timer id has to be one the
+// controls do not claim, and one of a page's own would be offered to them first and
+// swallowed.
+constexpr UINT_PTR kFrameTimer = 3;
 
 inline void ApplyBackdrop(HWND hwnd, bool dark, bool *micaOut) {
     const BOOL d = dark ? TRUE : FALSE;
@@ -1633,12 +1646,35 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         // one in the same frame, drawing the state from before that Tick -- and every mouse
         // message this window handles invalidates, so during a drag it is every frame, at
         // twice the drawing cost and half the frame rate.
+        //
+        // Unless Windows has the loop's turn in its own hands -- a drag of the border or the
+        // caption -- in which case this is the only paint there is going to be, and it has
+        // to happen or the window shows the size it had when the drag started.
         PAINTSTRUCT ps;
         BeginPaint(h, &ps);
-        if (!self->animOn) self->Paint();
+        if (!self->animOn || self->inSizeMove) self->Paint();
         EndPaint(h, &ps);
         return 0;
     }
+    case WM_ENTERSIZEMOVE:
+        // Windows is about to run a modal loop of its own for a drag of the border or of the
+        // caption. This window's frame loop -- and the compositor clock it paces itself
+        // with -- gets no turn again until that loop ends, so everything the loop does has
+        // to happen from a message instead, and the only message that keeps arriving is a
+        // timer. Without one the window repainted only when the mouse happened to move, the
+        // controls caught up with the new size only when the drag was let go, and whatever
+        // was animating -- an indeterminate bar, a page's glide -- stood still until then.
+        self->inSizeMove = true;
+        SetTimer(h, kFrameTimer, 16, nullptr);
+        return 0;
+    case WM_EXITSIZEMOVE:
+        self->inSizeMove = false;
+        KillTimer(h, kFrameTimer);
+        // And the clock is picked up again here, or the frame loop's first frame after the
+        // drag carries the whole drag's worth of `dt` -- which the loop clamps to a tenth of
+        // a second, but a tenth of a second of an animation in one step is a jump.
+        QueryPerformanceCounter(&self->qpcLast);
+        return 0;
     case WM_SIZE:
         if (wp == SIZE_RESTORED) self->MeasureFrame();
         self->Resize();
@@ -1847,10 +1883,20 @@ inline LRESULT CALLBACK Window::Proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_TIMER:
-        // Only the caret's is the window's own. A control's is offered to the controls
-        // (by index: a scroll bar's repeat scrolls, and scrolling replaces the list), and
-        // anything else a page set falls through to OnAppMessage, which is where a page's
-        // messages are answered.
+        // Only the caret's and the modal loop's are the window's own. A control's is offered
+        // to the controls (by index: a scroll bar's repeat scrolls, and scrolling replaces
+        // the list), and anything else a page set falls through to OnAppMessage, which is
+        // where a page's messages are answered.
+        if (wp == kFrameTimer) {
+            if (!self->inSizeMove) { KillTimer(h, kFrameTimer); return 0; }
+            // A frame of the loop that cannot run, in the loop's own order: tick, then
+            // paint. No Dispatch of its own -- the one at the top of this function covers
+            // the whole message, which is what the tick needs to be able to lay the page out.
+            self->Frame();
+            self->Paint();
+            ValidateRect(h, nullptr);
+            return 0;
+        }
         if (wp != kCaretTimer) {
             for (size_t i = 0; i < self->widgets.size(); i++)
                 if (self->widgets[i]->OnTimer(wp)) return 0;

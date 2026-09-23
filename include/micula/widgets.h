@@ -566,7 +566,7 @@ struct Slider : Widget {
 // drop-down's list -- takes two ids of its own (see DropDown), because a timer is
 // offered to the controls in order and the first bar to recognise the id takes it.
 //
-// So Micula uses timer ids 2 and 4 to 7. A page's own timers should be numbered
+// So Micula uses timer ids 2 to 7. A page's own timers should be numbered
 // outside that range; they reach the page through Window::OnAppMessage.
 constexpr UINT_PTR kScrollBarStateTimer  = 4;
 constexpr UINT_PTR kScrollBarRepeatTimer = 5;

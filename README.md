@@ -77,7 +77,7 @@ A program using Micula has to:
 - initialize COM on the UI thread (apartment-threaded) before `Window::Create`. The title
   bar icon and `Window::Image` use WIC.
 - be per-monitor DPI aware, through its manifest or `micula::EnablePerMonitorDpi()`.
-- leave timer IDs 2 and 4 to 7 to Micula.
+- leave timer IDs 2 to 7 to Micula.
 
 ## How it works
 

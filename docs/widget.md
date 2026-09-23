@@ -120,5 +120,5 @@ drawing frames.
 ## Timers
 
 A control that needs a timer calls `SetTimer(owner->hwnd, id, ms, nullptr)` and claims the
-id in `OnTimer`. Micula uses ids 2 and 4 to 7. Kill the timer in the destructor if the
+id in `OnTimer`. Micula uses ids 2 to 7. Kill the timer in the destructor if the
 control can be removed while it runs.
