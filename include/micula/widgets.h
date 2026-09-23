@@ -1433,11 +1433,21 @@ struct DropDown : Widget {
         if (again || now - typedAt > kTypeWindow) typed.clear();
         typedAt = now;
         typed.push_back(lower);
-        // From the option after the chosen one, and round: a key that has just found an option
-        // must not find the same one again. Coming back to it is still allowed, which is what
-        // refining the prefix to the option it is already on does.
-        for (int step = 1; step <= n; step++) {
-            const int i = (selected + step) % n;
+        // Where the search starts, and this is the whole of it: a first letter is a step, like a
+        // notch of the wheel, and a step goes forward -- the next option that starts with it,
+        // after the one chosen now. Every letter after it only refines an answer that has
+        // already been given, so it starts *at* the chosen option, and the answer stays put for
+        // as long as the option under it still starts with what has been typed. It moves on only
+        // when that option has been typed out of the running.
+        //
+        // Starting after the chosen option every time is what this was, and it made every letter
+        // a fresh errand: with five "Every ..." options in a row, E V E R Y walked through all
+        // five of them, a letter each, so the name that was typed out was never the name that
+        // ended up chosen. A search that walks a list while a name is typed into it is not what
+        // Explorer does, and Explorer is the behaviour people arrive with.
+        const int from = typed.size() > 1 ? selected : selected + 1;
+        for (int step = 0; step < n; step++) {
+            const int i = (from + step) % n;
             if (StartsWith(options[i], typed)) { Select(i); return true; }
         }
         // Nothing starts with it. Answered rather than ignored: see `refuse`.

@@ -177,8 +177,13 @@ The accent mark is drawn on the control's own row and stays there: the list slid
 so which option is under the mark is the choice, and the mark itself never travels.
 
 The keyboard can search, **while the list is open**: typing letters chooses the option that
-starts with what has been typed, and the list slides to it. The prefix is kept for a second
-of quiet, and pressing the same letter again steps to the next option that starts with it.
+starts with what has been typed, and the list slides to it. Only the first letter of a search
+is a step, like a notch of the wheel -- the next option that starts with it, after the one
+chosen now. Every letter after that refines the search from where it has arrived: the option
+already chosen stays chosen for as long as it still starts with what has been typed, so
+typing a name out of a long list of names does not walk down it. The prefix is kept for a
+second of quiet, and pressing the same letter again steps on to the next option that starts
+with it, which is the only way to reach the second "Monthly".
 Typing does nothing while the list is closed, which is what Space is for -- a closed
 drop-down is a button with a label on it and has no mark on screen to show a search
 result on.
