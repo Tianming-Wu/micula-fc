@@ -112,6 +112,10 @@ Slider(float value, float lo, float hi, float step, std::function<void(float)> o
 Keys: Left and Down subtract `step`, Right and Up add it, Home and End go to `lo` and
 `hi`.
 
+The knob eases to each new step over `motion::kFaster` rather than jumping to it, so a
+stepped slider shows where it has moved to; the value itself is exact the moment it
+changes, and it is the value that `onChange` is handed.
+
 During a drag, `onChange` is called while the window is painting, and only when the
 value moves to another step -- not once per frame. Update the page's fields there, but
 don't call `Layout()` or add or remove controls. Do that in `onCommit`.

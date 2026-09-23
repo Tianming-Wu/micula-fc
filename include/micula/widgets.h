@@ -481,9 +481,15 @@ struct Slider : Widget {
     std::function<void(float)> onCommit;
     // Between a press and its release, wherever the pointer has got to since.
     bool dragging = false;
+    // Where the knob is drawn, as a fraction, which trails a value that snaps from one step
+    // to the next. A step is the one thing about a stepped slider that is visible, and
+    // answering it by jumping the knob says the knob and the value are the same thing. They
+    // are not: the value is what the page is told and it is exact, the knob is where the
+    // result is drawn -- so the knob eases to each new step while the value is already there.
+    motion::Track drawn;
 
     Slider(float v, float a, float b, float s, std::function<void(float)> f)
-        : value(v), lo(a), hi(b), step(s), onChange(std::move(f)) {}
+        : value(v), lo(a), hi(b), step(s), onChange(std::move(f)), drawn(Frac()) {}
 
     bool Focusable() const override { return true; }
     // While it is being dragged: the knob follows the cursor, and the cursor moving is
@@ -496,6 +502,17 @@ struct Slider : Widget {
     // thumb is the one thing on screen saying the gesture has not ended yet.
     bool PressedVisual() const override { return pressed || dragging; }
     float Frac() const { return (value - lo) / (hi - lo); }
+
+    bool Animating() const override { return Widget::Animating() || drawn.Wants(Frac()); }
+    void Tick(float dt) override {
+        Widget::Tick(dt);
+        // A curve rather than a follower, because a step is a place rather than a direction:
+        // the knob arrives at it and stops, instead of closing a gap that a hand could keep
+        // opening. Retargeting means a fast drag restarts this once a step, which is a move
+        // the knob can make continuously.
+        drawn.To(Frac());
+        drawn.Step(dt, motion::kFaster);
+    }
 
     void SetFromX(float x) {
         const float t = std::clamp((x - rect.left - 8) / (std::max)(1.0f, Width(rect) - 16), 0.0f, 1.0f);
@@ -538,7 +555,7 @@ struct Slider : Widget {
         if (dragging && owner) SetFromX(Cursor().x);
         const float cy = rect.top + Height(rect) / 2;
         const float x0 = rect.left + 8, x1 = rect.right - 8;
-        const float at = x0 + Frac() * (x1 - x0);
+        const float at = x0 + std::clamp(drawn.value, 0.0f, 1.0f) * (x1 - x0);
         p.rt->FillRoundedRectangle(D2D1::RoundedRect({ x0, cy - 2, x1, cy + 2 }, 2, 2),
                                    p.Brush(c.controlStroke));
         p.rt->FillRoundedRectangle(D2D1::RoundedRect({ x0, cy - 2, at, cy + 2 }, 2, 2),
