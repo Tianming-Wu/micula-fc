@@ -131,14 +131,28 @@ DropDown(std::vector<std::wstring> options, int selected, std::function<void(int
 |---|---|
 | `std::vector<std::wstring> options` | The list. |
 | `int selected` | Index of the selected option. |
-| `std::function<void(int)> onChange` | Called with the new index when a different row is clicked, or on Up and Down (which wrap around). |
+| `std::function<void(int)> onChange` | Called with the new index when a different row is clicked, or on Up and Down (which wrap around while the list is closed). |
 | `bool open` | Whether the list is showing. Read only. |
 
 Click, Space or Enter opens the list; a click on a row chooses it; Esc, a click
-elsewhere or deactivating the window closes it. The list opens below the control, or
-above it when it only fits there. When it fits on neither side it takes the larger side
-and scrolls. The available room is `ClipRect()`, or the client area below the title bar
-when the page does not scroll.
+elsewhere or deactivating the window closes it.
+
+The list opens **over the control**, with the chosen row where the control's own row is:
+what Windows 11's own combo boxes do, and what makes choosing read as swapping one name
+for another rather than as picking from a menu. It grows out of the control over
+`motion::kFast`, each edge travelling from the control's row outward, and collapses back
+into it.
+
+Choosing then moves the whole list rather than a marker within it. The panel slides one
+row -- 32 DIPs -- per step, so the row that arrives is on the control's own row and the one
+that was there has left it. That is what a notch of the wheel over an open list does, and
+Up and Down, and dragging the list's scroll bar.
+
+The panel is as tall as the list and is not cut to the room it has: where the room runs out
+the page clips it, and the far end of the list is what goes out of sight -- never the chosen
+row, which stays on the control. Its scroll bar appears when the list is taller than that
+room, which is `ClipRect()` or, on a page that does not scroll, the client area below the
+title bar.
 
 `rect` must be 32 DIPs tall: while the list is open, `rect` grows to cover it. An open
 list's scroll bar uses timers 6 and 7.

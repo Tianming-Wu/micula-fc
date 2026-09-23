@@ -215,7 +215,7 @@ void Gallery::Layout() {
                              L"Monthly" },
                            interval, [this](int i) { interval = i; })),
           card(L"Check for updates",
-               L"DropDown - opens upward when short of room", 180));
+               L"DropDown - opens over the control, the chosen row on it", 180));
 
     heading(L"Values");
     {

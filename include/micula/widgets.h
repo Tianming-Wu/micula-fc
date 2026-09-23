@@ -879,9 +879,10 @@ struct DropDown : Widget {
     std::function<void(int)> onChange;
     bool open = false;
     float rowH = 32.0f;
-    // How far the flyout is out: 0 closed, 1 fully open. Fluent fades and lifts a
-    // flyout into place rather than blinking it on, and on the way out it fades rather
-    // than vanishing -- which is why the control stays raised while this runs down.
+    // How far the lid is open: 0 is the control's own row and nothing else, 1 is the whole
+    // popup. Fluent expands a flyout out of the control it belongs to rather than blinking
+    // it on, and on the way out it collapses back into it rather than vanishing -- which is
+    // why the control stays raised while this runs down.
     //
     // Two curves, because Fluent has two: in on "Fast Out, Slow In", out on "Slow Out,
     // Fast In". A flyout arriving settles; a flyout leaving gets out of the way.
@@ -898,16 +899,28 @@ struct DropDown : Widget {
         }
     }
 
-    // The control's own row. While the list is open `rect` grows to cover it -- and
-    // grows *upwards* when that is where the room is -- so the head cannot be derived
-    // from `rect` any more.
+    // The control's own row. While the list is open `rect` grows to cover the popup, so
+    // the head cannot be derived from `rect` any more.
     D2D1_RECT_F head = {};
-    bool upwards = false;
-
-    // Only for a list cut short (see List): how far its rows are scrolled, and where they
-    // are drawn, which follows through a glide the way the page's scrollAt does.
-    float listScroll = 0.0f;
-    motion::Track listAt;
+    // The rows' margin inside the popup, top and bottom. WinUI's
+    // ComboBoxDropdownContentMargin, of which the 4 DIPs that show are the part that
+    // matters here.
+    static constexpr float kPad = 4.0f;
+    // Where the popup comes to rest: worked out when it opens, from the chosen row, and
+    // then left alone -- the popup does not move while it is being scrolled through, the
+    // *rows* do. See Place().
+    D2D1_RECT_F frame = {};
+    // Where the panel is, in rows: 0 has the first option on the control's own row, 3 has
+    // the fourth there. It trails `selected` so the list slides to a new choice rather than
+    // jumping, and it is what the panel -- and every row in it -- is drawn from. The list
+    // moves past the control as a whole; nothing scrolls inside the panel, and no marker
+    // travels down a still one.
+    float slid = 0.0f;
+    // How long the slide takes to close most of its gap, in seconds. A follower rather than
+    // a curve with a duration, like the page's scroll and the segmented indicator's block:
+    // a spun wheel retargets this several times inside one frame, and a storyboard restarted
+    // that often would stutter between the notches.
+    static constexpr float kSlideLag = 0.05f;
     // Its scroll bar, the page's own control: WinUI's drop-down is a ScrollViewer, and
     // the bar in it is the one every other ScrollViewer has. Made the first time a list
     // needs one, not for every drop-down on every layout.
@@ -923,108 +936,124 @@ struct DropDown : Widget {
     // not scroll, the window under its caption -- which is painted last, over everything.
     D2D1_RECT_F Bounds() const {
         if (!owner || !owner->hwnd) return D2D1_RECT_F{ 0, 0, 0, 0 };
-        const D2D1_RECT_F clip = owner->ClipRect();
+        // In this control's own space rather than the window's, which on a scrolling page
+        // are not the same thing: the strip the page shows moves with the scroll while the
+        // control's rectangle stays where the layout put it. Measuring against the
+        // window's rectangle instead made a control halfway down the page think it had the
+        // room the top of the page had, and open downward off the bottom of it.
+        const D2D1_RECT_F clip = VisibleArea();
         if (clip.bottom > clip.top) return clip;
-        return D2D1_RECT_F{ 0, kCaptionH, owner->ClientW(), owner->ClientH() };
+        // No scrolling area: the window under its caption, in this control's space too,
+        // because the page may still be drawn through a transform.
+        float dy = 0.0f, op = 1.0f;
+        if (scrolls) owner->ContentTransform(&dy, &op);
+        return D2D1_RECT_F{ 0, kCaptionH - dy, owner->ClientW(), owner->ClientH() - dy };
     }
-    float FullHeight() const { return rowH * options.size() + 8; }
+    float FullHeight() const { return rowH * (float)options.size() + 2 * kPad; }
 
-    // Where the list goes: under the control, unless the page's visible area has no room
-    // for it there and does have room above.
+    // The y a row has to be at to be over the control's own row: the two boxes centred on
+    // each other, which for a row and a control of the same height is the two boxes on top
+    // of each other -- and is why the popup reads as a lid closing over the control.
+    float RowLine() const { return (Head().top + Head().bottom) / 2 - rowH / 2; }
+    // Where a row is drawn. The panel's place in rows is `slid`, so every row moves with
+    // it, which is the whole of the difference between this and a list that scrolls.
+    float RowTop(int i) const { return RowLine() + rowH * ((float)i - slid); }
+
+    // The panel: the whole list, laid out so that the chosen row is on the control's own
+    // row, and moved as a whole when the choice moves.
     //
-    // **Windows flips its flyouts and this has to as well**, because the list is a
-    // scrolling widget and the page clips those: one opened near the bottom of a page
-    // was not merely inelegant, it was *cut off*, with the options that did not fit
-    // simply not drawn and no sign that they existed.
+    // **This is what a Windows 11 combo box does**, and it is not "open below and flip when
+    // short of room": the popup covers the control with the chosen item on it, so the two
+    // names are in the same place and the choice reads as a swap rather than as a menu. The
+    // rule is one line of ComboBox::GetNonPannablePopupLayout -- the chosen item is laid out
+    // at `cbY + cbHeight/2 - itemHeight/2 - margin.Top` -- applied again after every step,
+    // which is what makes the wheel feel like a dial under the control rather than a menu
+    // being dragged about.
     //
-    // **And when neither side has room, it is cut short and its rows scroll**, which is
-    // what WinUI's ComboBox does: its popup is a ScrollViewer. Its fixed cap,
-    // MaxDropDownHeight's 504 DIPs, is not copied -- a list that fits is drawn whole,
-    // whatever its length, so the room is the only cap.
-    // Flipping alone leaves a nine-option list on a small window with nowhere to go at
-    // some scroll positions: it went down anyway, whole, and the page cut it off. It
-    // takes the roomier side and stops four DIPs short of the edge, the gap it keeps from
-    // the control.
-    D2D1_RECT_F List() const { return Place(nullptr); }
-    // Told by the branch that cut it rather than by comparing heights: `(top + tall) - top`
-    // need not come back as `tall` in floats, and a list that fits must not be taken for
-    // one that scrolls.
-    bool Overflows() const { bool cut = false; Place(&cut); return cut; }
-    D2D1_RECT_F Place(bool *cutShort) const {
-        const D2D1_RECT_F h = Head();
-        const float tall = FullHeight();
-        float top = h.bottom + 4;
-        const D2D1_RECT_F b = Bounds();
-        if (b.bottom > b.top && top + tall > b.bottom) {
-            if (h.top - 4 - tall >= b.top) {
-                top = h.top - 4 - tall;
-            } else {
-                const float below = b.bottom - top - 4;
-                const float above = h.top - 4 - b.top - 4;
-                const float cut = (std::max)((std::max)(below, above), rowH + 8);
-                if (above > below) top = h.top - 4 - cut;
-                if (cutShort) *cutShort = cut < tall;
-                return { h.left, top, h.right, top + cut };
-            }
-        }
-        return { h.left, top, h.right, top + tall };
+    // One deliberate difference. WinUI clamps the popup into the window and shrinks it, so
+    // the chosen row drifts off the control near the top and bottom of the screen. This lets
+    // the panel hang off the strip and be clipped by the page instead, because the chosen
+    // row being on the control is the whole reason the popup is over it: what goes out of
+    // sight is the far end of the list, which is the end to lose.
+    D2D1_RECT_F FrameAt(float k) const {
+        const float top = RowLine() - kPad - rowH * k;
+        return { Head().left, top, Head().right, top + FullHeight() };
     }
-    float MaxListScroll() const { return (std::max)(0.0f, FullHeight() - Height(List())); }
-
-    // Scrolled by the wheel and the bar's arrows and track (`glide`), or by its thumb,
-    // which has to stay under the pointer.
-    void ScrollList(float to, bool glide) {
-        listScroll = std::clamp(to, 0.0f, MaxListScroll());
-        if (!glide) listAt.Set(listScroll);
+    D2D1_RECT_F Frame() const { return FrameAt(slid); }          // where it is drawn
+    D2D1_RECT_F Rest() const { return FrameAt((float)selected); }  // where it belongs
+    // Everything that follows from the chosen row: the area the mouse can reach and the bar.
+    // The rows themselves need no telling -- RowTop reads `slid`.
+    void Sync() {
+        const D2D1_RECT_F f = Rest();
+        rect = { head.left, (std::min)(head.top, f.top),
+                 head.right, (std::max)(head.bottom, f.bottom) };
         SyncBar();
+    }
+    // The popup as it is drawn *now*: it grows out of the control's own row, each edge
+    // that has somewhere to go travelling from that row to where it ends up. Up and down
+    // both when the list reaches both ways, which is the ordinary case -- the chosen row
+    // sits over the control and its neighbours arrive from under it.
+    //
+    // WinUI does this with SplitOpenThemeAnimation, whose ClosedLength, OpenedLength and
+    // OffsetFromCenter are the three numbers ComboBoxTemplateSettings hands it for exactly
+    // this purpose.
+    D2D1_RECT_F Shown() const {
+        const D2D1_RECT_F f = Frame();
+        const float k = openT.value;
+        const float top = f.top < head.top ? head.top + (f.top - head.top) * k : head.top;
+        const float bot = f.bottom > head.bottom
+                              ? head.bottom + (f.bottom - head.bottom) * k
+                              : head.bottom;
+        return { head.left, top, head.right, bot };
+    }
+    // Taller than the room it is seen through, which is the only thing the bar is for.
+    bool Overflows() const { return FullHeight() > Height(Bounds()) + 0.5f; }
+
+    // The chosen row, by the wheel, the keys, a click or the bar. The panel's place and the
+    // bar come out of it -- see Sync -- so there is nothing here to keep in step by hand.
+    void Select(int i) {
+        const int n = (int)options.size();
+        if (n <= 0) return;
+        i = std::clamp(i, 0, n - 1);
+        if (i != selected) {
+            selected = i;
+            Sync();
+            if (onChange) onChange(selected);
+        }
+        if (BarShown()) { bar->Wake(); bar->Poll(); }
         if (owner) owner->Invalidate();
     }
-    // The chosen row wholly in view, with the rows' own four DIPs of margin when it is the
-    // first or the last.
-    void ScrollToRow(int i, bool glide) {
-        if (i < 0 || !Overflows()) return;
-        const float view = Height(List());
-        const float top = rowH * i, bottom = top + rowH + 8;
-        if (top < listScroll) ScrollList(top, glide);
-        else if (bottom > listScroll + view) ScrollList(bottom - view, glide);
+    // The bar, which works in DIPs while the list works in rows. A step smaller than a row
+    // still moves a row: an arrow that did nothing would be an arrow that is broken.
+    void ScrollTo(float to, bool /*glide*/) {
+        if (!open) return;
+        Select(to < slid * rowH ? (int)std::floor(to / rowH) : (int)std::ceil(to / rowH));
     }
-    // The bar's geometry, in the list's resting place (before Lift). The ScrollViewer is
-    // the popup's whole inside, within its 1-DIP border, and the rows' 4-DIP margins above
-    // and below are content that scrolls (ComboBoxDropdownContentMargin); the bar keeps
-    // the 1 DIP from that edge that the page's does (ScrollViewerScrollBarMargin).
+    // The bar's geometry. It belongs to the list, so it travels with the panel -- but its
+    // track is only drawn where the page can show it, and what it reports is the chosen
+    // row's place in the list, which is the only thing about this list that moves.
     void SyncBar() {
         if (!bar) return;
-        const D2D1_RECT_F l = List();
-        bar->rect = { l.right - 2 - ScrollBar::kSize, l.top + 1, l.right - 2, l.bottom - 1 };
-        bar->area = l;
-        bar->viewport = Height(l);
+        const D2D1_RECT_F f = Frame();
+        const D2D1_RECT_F b = Bounds();
+        bar->rect = { f.right - 2 - ScrollBar::kSize, (std::max)(f.top, b.top) + 1,
+                      f.right - 2, (std::min)(f.bottom, b.bottom) - 1 };
+        bar->area = f;
+        bar->viewport = Height(b);
         bar->extent = FullHeight();
-        bar->value = listScroll;
-        bar->drawn = listAt.value;
+        bar->value = (std::min)((std::max)(0.0f, slid * rowH),
+                                (std::max)(0.0f, FullHeight() - Height(b)));
+        bar->drawn = bar->value;
     }
     bool BarShown() const { return open && bar && bar->visible; }
 
-    // How far the flyout still has to travel, and in which direction. It comes *out of*
-    // the control, so a list below starts six DIPs high and a list above starts six
-    // DIPs low. Both the drawing and the hit test go through this, or the row under the
-    // pointer is not the row being lit.
-    float Lift() const { return (upwards ? 6.0f : -6.0f) * (1.0f - openT.value); }
-
-    // Which option is at this point, in the flyout's own space. -1 for the gap between
-    // the control and the list, and for the padding around the rows -- and on a list cut
-    // short, for its bar and for the edges the rows are cut at.
+    // Which option is at this point. -1 for anything outside the panel as it is drawn right
+    // now -- a row the panel has not slid over yet is not there -- and for the bar.
     int RowAt(float x, float y) const {
-        const D2D1_RECT_F l = List();
-        if (!Overflows()) {
-            if (y < l.top + 4 || y >= l.bottom - 4) return -1;
-            const int i = (int)((y - (l.top + 4)) / rowH);
-            return (i >= 0 && i < (int)options.size()) ? i : -1;
-        }
-        if (y < l.top + 1 || y >= l.bottom - 1) return -1;
+        const D2D1_RECT_F s = Shown();
+        if (y < s.top || y >= s.bottom) return -1;
         if (BarShown() && Inside(bar->rect, x, y)) return -1;
-        const float at = y - l.top + listAt.value;      // in the rows' own space
-        if (at < 4 || at >= FullHeight() - 4) return -1;
-        const int i = (int)((at - 4) / rowH);
+        const int i = (int)std::floor((y - RowLine()) / rowH + slid);
         return (i >= 0 && i < (int)options.size()) ? i : -1;
     }
 
@@ -1034,37 +1063,34 @@ struct DropDown : Widget {
             head = { rect.left, rect.top, rect.right, rect.top + metric::kControlH };
             open = true;
             z = 1;
-            const D2D1_RECT_F l = List();
-            upwards = l.top < head.top;
-            // The whole of it takes the mouse, or a click on an option falls through to
-            // whatever is behind the list.
-            rect = { head.left, (std::min)(head.top, l.top),
-                     head.right, (std::max)(head.bottom, l.bottom) };
-            listScroll = 0.0f;
-            listAt.Set(0.0f);
-            if (Overflows()) {
+            // Opened with the chosen row already on the control: nothing to slide.
+            slid = (float)selected;
+            const bool cut = Overflows();
+            if (cut) {
                 if (!bar) {
                     bar = std::make_unique<ScrollBar>(
-                        [this](float to, bool glide) { ScrollList(to, glide); });
+                        [this](float to, bool glide) { ScrollTo(to, glide); });
                     bar->stateTimer = kDropDownBarStateTimer;
                     bar->repeatTimer = kDropDownBarRepeatTimer;
                 }
                 bar->owner = owner;
                 bar->visible = true;
-                // Opened on the chosen row, with rows on either side of it where the
-                // scroll allows, so the list says which way the others are.
-                ScrollList(4 + rowH * selected + rowH / 2 - Height(l) / 2, false);
-                // And the line shows at once, for the same reason: the pointer is on the
-                // control, not over the list, so nothing else would wake it.
+            }
+            // The whole of it takes the mouse, or a click on an option falls through to
+            // whatever is behind the list.
+            Sync();
+            if (cut) {
+                // The line shows at once: the pointer is on the control, not over the
+                // list, so nothing else would wake it.
                 bar->Wake();
                 bar->Poll();
             }
         } else {
             open = false;
-            // Stays raised while the list fades out, and Tick drops it back to 0 when
-            // the fade is done. Nothing is stolen by that: the rect has gone back to the
-            // control's own row, so the hit test cannot reach the list even though it is
-            // still being drawn.
+            // Stays raised while the lid closes, and Tick drops it back to 0 when that is
+            // done. Nothing is stolen by that: the rect has gone back to the control's own
+            // row, so the hit test cannot reach the rows even though they are still being
+            // drawn.
             z = 1;
             if (head.right > head.left) rect = head;
             // Its timers go with it; see kDropDownBarStateTimer.
@@ -1079,7 +1105,7 @@ struct DropDown : Widget {
     void Dismiss() override { if (open) SetOpen(false); }
     bool Animating() const override {
         return Widget::Animating() || openT.Wants(open ? 1.0f : 0.0f) ||
-               listAt.Wants(listScroll) || (BarShown() && bar->Animating());
+               slid != (float)selected || (BarShown() && bar->Animating());
     }
     void Tick(float dt) override {
         Widget::Tick(dt);
@@ -1087,19 +1113,23 @@ struct DropDown : Widget {
         if (open) {
             openT.Step(dt, motion::kFast, motion::Decel);
         } else if (!openT.Step(dt, motion::kFaster, motion::Accel)) {
-            z = 0;          // the list has finished fading; stop keeping it raised
+            z = 0;          // the lid has finished closing; stop keeping it raised
         }
-        // A glide, like a page's scroll: the rows trail the scroll position on
-        // motion::Decel rather than jumping to it.
-        listAt.To(listScroll);
-        listAt.Step(dt, motion::kFast);
+        // What has a gap to close is the panel's own place: `slid` is where the list is
+        // drawn and `selected` is where it belongs.
+        const float want = (float)selected;
+        if (slid != want) {
+            slid += (want - slid) * (1.0f - std::exp(-dt / kSlideLag));
+            if (std::fabs(want - slid) < 0.004f) slid = want;
+            SyncBar();
+        }
         if (BarShown()) {
             SyncBar();
             // The bar is not in the window's list, so nothing else tells it the pointer
             // has left: this control's own hover going is what runs this frame.
             if (!barGrab) {
                 const D2D1_POINT_2F at = Cursor();
-                bar->hover = hover && Inside(bar->rect, at.x, at.y - Lift());
+                bar->hover = hover && Inside(bar->rect, at.x, at.y);
             }
             bar->Tick(dt);
         }
@@ -1110,15 +1140,11 @@ struct DropDown : Widget {
         // A press on the list's bar scrolls it. It does not choose, and it does not close.
         if (barGrab) { barGrab = false; return; }
         if (!open) { SetOpen(true); return; }
-        // Through the same two functions the drawing uses -- `Cursor` for the page's own
-        // offset, `Lift` for the flyout's. Reading the cursor a second way here is how
-        // the row that was lit and the row that was chosen came to be different rows.
+        // Through the same function the drawing uses, so the row that was lit and the row
+        // that is chosen cannot come apart.
         const D2D1_POINT_2F at = Cursor();
-        const int i = RowAt(at.x, at.y - Lift());
-        if (i >= 0 && i != selected) {
-            selected = i;
-            if (onChange) onChange(selected);
-        }
+        const int i = RowAt(at.x, at.y);
+        if (i >= 0) Select(i);
         SetOpen(false);
     }
     bool OnKey(WPARAM vk) override {
@@ -1128,26 +1154,33 @@ struct DropDown : Widget {
         if (vk == VK_ESCAPE && open) { SetOpen(false); return true; }
         if (vk != VK_UP && vk != VK_DOWN) return false;
         const int n = (int)options.size();
-        selected = (selected + (vk == VK_DOWN ? 1 : n - 1)) % n;
-        if (open) ScrollToRow(selected, true);
-        if (onChange) onChange(selected);
+        if (n <= 0) return false;
+        // Open, a step goes through Select like the wheel's does, so the rows slide under
+        // the control as the choice moves. Closed there is nothing to slide, and the only
+        // thing a list can do that a scroll cannot is wrap.
+        if (open) {
+            Select(selected + (vk == VK_DOWN ? 1 : -1));
+            return true;
+        }
+        Select((selected + (vk == VK_DOWN ? 1 : n - 1)) % n);
         return true;
     }
 
     // The list's bar, driven from here: it is not one of the window's controls, because
     // the window's list is rebuilt on every layout and this bar lives as long as the list.
-    // Everything arrives in the page's space and goes on in the flyout's.
+    // No offset to take off anywhere: the popup is drawn where it was placed, and it is
+    // the rows that move inside it rather than it moving over them.
     void OnPress(float x, float y) override {
         barGrab = false;
         if (!BarShown()) return;
         SyncBar();
-        if (!Inside(bar->rect, x, y - Lift())) return;
+        if (!Inside(bar->rect, x, y)) return;
         barGrab = true;
         bar->hover = true;
-        bar->OnPress(x, y - Lift());
+        bar->OnPress(x, y);
     }
     void OnDrag(float x, float y) override {
-        if (barGrab && BarShown()) bar->OnDrag(x, y - Lift());
+        if (barGrab && BarShown()) bar->OnDrag(x, y);
     }
     void OnRelease() override {
         if (barGrab && BarShown()) bar->OnRelease();
@@ -1155,23 +1188,22 @@ struct DropDown : Widget {
     void OnPointerMove(float x, float y) override {
         if (!BarShown()) return;
         SyncBar();
-        // The flyout's own space: the page's offset is already off it, see
-        // Widget::OnPointerMove.
-        const float fy = y - Lift();
-        if (!barGrab) bar->hover = hover && Inside(bar->rect, x, fy);
-        bar->OnPointerMove(x, fy);
+        if (!barGrab) bar->hover = hover && Inside(bar->rect, x, y);
+        bar->OnPointerMove(x, y);
     }
     bool OnTimer(UINT_PTR id) override { return BarShown() && bar->OnTimer(id); }
     bool OnWheel(float x, float y, float notches) override {
-        if (!open || !Overflows() || !Inside(List(), x, y - Lift())) return false;
-        // A notch is the system's wheel-lines setting times 22 DIPs, which is what a
-        // page scrolling the same way should use too, so the list moves as the page under
-        // it does. Kept even at either end: passed on, it would scroll the page, and that
-        // lays the page out again and takes the list away.
-        UINT lines = 3;
-        SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
-        if (lines == WHEEL_PAGESCROLL) lines = 6;
-        ScrollList(listScroll - notches * (float)lines * 22.0f, true);
+        if (!open || !Inside(Shown(), x, y)) return false;
+        // One row a notch, and the row that arrives at the control's own row is the choice.
+        // A notch is a step through the items here and not a distance: this is a list of
+        // things to choose, and a wheel that moved it 66 DIPs, as the page's does, would
+        // leave the chosen row somewhere other than under the control it was chosen from.
+        //
+        // Taken even at either end. Passed on, it would scroll the page out from under an
+        // open list -- and on a page that lays itself out in response to a scroll, take the
+        // list away with it.
+        const int step = (int)std::lround(-notches);
+        Select(selected + (step != 0 ? step : (notches > 0.0f ? -1 : 1)));
         if (BarShown()) { bar->Wake(); bar->Poll(); }
         return true;
     }
@@ -1197,64 +1229,69 @@ struct DropDown : Widget {
         const float openF = openT.value;
         if (openF <= 0.0f) return;
 
-        // Offset arithmetically rather than with a transform, because the page may
-        // already have one set on the device context and this must compose with it, not
-        // replace it.
-        const float lift = Lift();
-        const D2D1_RECT_F l0 = List();
-        const D2D1_RECT_F l = { l0.left, l0.top + lift, l0.right, l0.bottom + lift };
+        // Where the lid is *now*, and the rows where they rest. The two are separate, and
+        // that separation is the whole of the animation: the frame grows out of the
+        // control's own row while the rows stay exactly where the layout put them, so the
+        // chosen row is over the control from the first frame to the last, and what opens
+        // is a window onto a list rather than a list that slides into place.
+        const D2D1_RECT_F s = Shown();
+        if (s.bottom - s.top < 2.0f) return;
 
         // A flyout is not a card: it is over the page rather than part of it, so it gets
-        // an opaque surface of its own and a shadow. The shadow is five rounded
-        // rectangles at four percent rather than a blur -- there is no cheap real one
-        // without a layered popup or a Direct2D effect, and the only job it has is to
-        // say that this is not painted on the page.
-        for (int s = 5; s >= 1; s--) {
-            const float e = (float)s * 1.5f;
-            p.FillRound({ l.left - e, l.top - e + 3, l.right + e, l.bottom + e + 3 },
-                        8.0f + e, Fade(Rgb(0x000000, 0.04f), openF));
+        // an opaque surface of its own and a shadow.
+        //
+        // The shadow is Fluent's, which is a blur, and there is no cheap real blur in
+        // Direct2D without an effect and a layer per frame -- so this is twelve rounded
+        // rectangles at 0.9 per cent, the largest and faintest outermost, which stack into
+        // a falloff smooth enough to read as one. It was five at four per cent, and five at
+        // four per cent is a black band with an edge on it: at the size of a flyout the
+        // steps show as bands, and the four per cent at the outermost layer is not faint
+        // enough to disappear. Four DIPs down and none up, because the light is above the
+        // popup and the popup hangs off the control it belongs to.
+        constexpr int kShadowLayers = 12;
+        constexpr float kShadowReach = 14.0f;
+        constexpr float kShadowDrop = 4.0f;
+        for (int i = kShadowLayers; i >= 1; i--) {
+            const float e = kShadowReach * (float)i / (float)kShadowLayers;
+            p.FillRound({ s.left - e, s.top - e + kShadowDrop,
+                          s.right + e, s.bottom + e + kShadowDrop },
+                        8.0f + e, Fade(Rgb(0x000000, 0.009f), openF));
         }
-        p.FillRound(l, 8.0f, Fade(c.flyoutBg, openF));
-        p.StrokeRound(l, 8.0f, Fade(c.flyoutStroke, openF));
-        // A list cut short has its rows scrolled and cut at the inside of its border,
-        // which is where WinUI's ScrollViewer is. One that fits draws nothing differently.
-        const bool cut = Overflows();
-        const float off = cut ? listAt.value : 0.0f;
-        if (cut)
-            p.rt->PushAxisAlignedClip({ l.left, l.top + 1, l.right, l.bottom - 1 },
-                                      D2D1_ANTIALIAS_MODE_ALIASED);
+        p.FillRound(s, 8.0f, Fade(c.flyoutBg, openF));
+        p.StrokeRound(s, 8.0f, Fade(c.flyoutStroke, openF));
+
+        // The rows, clipped to the lid: what it has not grown over yet is not drawn, and a
+        // row the leading edge has reached half way through is cut there.
+        p.rt->PushAxisAlignedClip({ s.left, s.top + 1, s.right, s.bottom - 1 },
+                                  D2D1_ANTIALIAS_MODE_ALIASED);
         const D2D1_POINT_2F at = open ? Cursor() : D2D1::Point2F();
-        const int hot = open ? RowAt(at.x, at.y - lift) : -1;
+        const int hot = open ? RowAt(at.x, at.y) : -1;
         for (size_t i = 0; i < options.size(); i++) {
-            const D2D1_RECT_F row = { l.left + 4, l.top + 4 + rowH * i - off,
-                                      l.right - 4, l.top + 4 + rowH * (i + 1) - off };
-            if (cut && (row.bottom <= l.top || row.top >= l.bottom)) continue;
+            const float top = RowTop((int)i);
+            const D2D1_RECT_F row = { s.left + 4, top, s.right - 4, top + rowH };
+            if (row.bottom <= s.top || row.top >= s.bottom) continue;
             const bool over = (int)i == hot;
             if (over) p.FillRound(row, metric::kRadiusControl, Fade(c.subtleHover, openF));
             if ((int)i == selected) {
-                // Fluent marks the selected row with a short accent bar on the left
-                // rather than by filling it, which keeps the hover highlight legible
-                // on top of it.
+                // Fluent marks the chosen row with a short accent bar on the left rather
+                // than by filling it, which keeps the hover highlight legible on top of it.
+                // The bar sits in the panel's own margin and the label beside it starts at
+                // the same x as the control's own label, so the moment the panel settles the
+                // chosen row *is* the control's row, down to the pixels.
                 p.rt->FillRoundedRectangle(
-                    D2D1::RoundedRect({ row.left + 2, row.top + 8, row.left + 5, row.bottom - 8 },
+                    D2D1::RoundedRect({ row.left - 3, row.top + 8, row.left, row.bottom - 8 },
                                       1.5f, 1.5f), p.Brush(Fade(c.accent, openF)));
             }
-            p.Text(options[i], { row.left + 12, row.top, row.right, row.bottom },
+            p.Text(options[i], { row.left + 7, row.top, row.right, row.bottom },
                    p.font->body, Fade(c.textPrimary, openF));
         }
-        if (!cut) return;
-        p.rt->PopAxisAlignedClip();
         // The bar once the list has arrived: its line is a setter, and at full strength
-        // over a list still fading in it would arrive first.
-        if (!BarShown() || openF < 1.0f) return;
-        SyncBar();
-        // Laid out where the list rests and drawn where it is, through whatever transform
-        // the page has set -- composed with it, as PaintArrow does, not replacing it.
-        D2D1_MATRIX_3X2_F was;
-        p.rt->GetTransform(&was);
-        p.rt->SetTransform(D2D1::Matrix3x2F::Translation(0.0f, lift) * was);
-        bar->Paint(p);
-        p.rt->SetTransform(was);
+        // over a list still growing it would arrive first.
+        if (BarShown() && openF >= 1.0f) {
+            SyncBar();
+            bar->Paint(p);
+        }
+        p.rt->PopAxisAlignedClip();
     }
 };
 
