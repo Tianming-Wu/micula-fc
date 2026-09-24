@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(micula VERSION 0.1.0 DESCRIPTION "A small Fluent control set for plain Win32" LANGUAGES CXX)
+project(micula
+    VERSION 0.1.0
+    DESCRIPTION "A small Fluent control set for plain Win32"
+    LANGUAGES CXX
+)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Micula is a Windows library: it draws with Direct2D over DirectComposition.")
@@ -15,18 +19,14 @@ target_include_directories(micula INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
 target_compile_features(micula INTERFACE cxx_std_17)
-# window.h calls the wide API throughout, so a consumer has to compile with UNICODE as
-# well: without it its own <windows.h> still answers with the A variants, and whatever
-# it hands in -- a class name, a font name -- is a byte string these wide calls read as
-# UTF-16. On the library rather than on the examples, because the header *is* the
-# interface.
+
+# Ensure library and its consumers use UTF-8.
 target_compile_definitions(micula INTERFACE UNICODE _UNICODE)
-# `WS_EX_NOREDIRECTIONBITMAP` sits behind `WINVER >= 0x0602` in some SDKs -- MinGW-w64's,
-# whose default is lower, is one -- and this window is Windows 10+ by construction. Said
-# out loud rather than inherited, so the same source builds under more than one toolchain.
+
+# Prevent non-msvc toolchains that contains weird WINVER values on newer platforms.
 target_compile_definitions(micula INTERFACE WINVER=0x0A00 _WIN32_WINNT=0x0A00)
-# MSVC gets these from window.h's #pragma comment lines as well; other toolchains
-# need them spelled out.
+
+# For non-msvc toolchains that don't work with `#pragma comment(lib)`
 target_link_libraries(micula INTERFACE
     d2d1 d3d11 dxgi dcomp dwrite dwmapi imm32 windowscodecs user32 gdi32 ole32 advapi32)
 
